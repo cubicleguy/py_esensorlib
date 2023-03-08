@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "esensorlib"
+version = "1.0.0"
+authors = [
+  { name="Raymond Chow", email="raymond.chow@ea.epson.com" },
+]
+description = "Python driver package for Epson Sensing System devices"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {file = "LICENSE"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Embedded Systems",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Localization",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+]
+keywords = ["inertial", "sensor", "imu", "accelerometer", "gyroscope", "navigation"]
+dependencies = [
+    "tqdm >= 4.62.3",
+    "pyserial >= 3.5",
+    "tabulate >= 0.9.0",
+]
