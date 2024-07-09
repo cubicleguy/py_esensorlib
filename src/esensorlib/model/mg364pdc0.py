@@ -1,6 +1,6 @@
 # MIT License
 
-# Copyright (c) 2023, Seiko Epson Corporation
+# Copyright (c) 2023, 2024 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -22,137 +22,75 @@
 
 """Constant and definition for IMU M-G364PDC0"""
 
-from collections import namedtuple
+from enum import Enum
 
 # Low-level UART
 BURST_MARKER = 0x80
 DELIMITER = 0x0D
-WINID = 0x07E
 
-# Low-level UART Timing Delays max in seconds
-TSTALL = 70e-6
-TWRITERATE = 350e-6
-TREADRATE = 350e-6
 
-# register map by namedtuple
-reg = namedtuple("reg", "winid addr addrh", defaults=[None, None, None])
+class Reg(Enum):
+    """WIN_ID and Register Address"""
 
-BURST = reg(0, 0x00)
-MODE_CTRL = reg(0, 0x02, 0x03)
-DIAG_STAT = reg(0, 0x04)
-FLAG = reg(0, 0x06)
-GPIO = reg(0, 0x08, 0x09)
-COUNT = reg(0, 0x0A)
-RANGE_OVER = reg(0, 0x0C)
-TEMP_HIGH = reg(0, 0x0E)
-TEMP_LOW = reg(0, 0x10)
-XGYRO_HIGH = reg(0, 0x12)
-XGYRO_LOW = reg(0, 0x14)
-YGYRO_HIGH = reg(0, 0x16)
-YGYRO_LOW = reg(0, 0x18)
-ZGYRO_HIGH = reg(0, 0x1A)
-ZGYRO_LOW = reg(0, 0x1C)
-XACCL_HIGH = reg(0, 0x1E)
-XACCL_LOW = reg(0, 0x20)
-YACCL_HIGH = reg(0, 0x22)
-YACCL_LOW = reg(0, 0x24)
-ZACCL_HIGH = reg(0, 0x26)
-ZACCL_LOW = reg(0, 0x28)
-ID = reg(0, 0x4C)
-XDLTA_HIGH = reg(0, 0x64)
-XDLTA_LOW = reg(0, 0x66)
-YDLTA_HIGH = reg(0, 0x68)
-YDLTA_LOW = reg(0, 0x6A)
-ZDLTA_HIGH = reg(0, 0x6C)
-ZDLTA_LOW = reg(0, 0x6E)
-XDLTV_HIGH = reg(0, 0x70)
-XDLTV_LOW = reg(0, 0x72)
-YDLTV_HIGH = reg(0, 0x74)
-YDLTV_LOW = reg(0, 0x76)
-ZDLTV_HIGH = reg(0, 0x78)
-ZDLTV_LOW = reg(0, 0x7A)
-SIG_CTRL = reg(1, 0x00, 0x01)
-MSC_CTRL = reg(1, 0x02, 0x03)
-SMPL_CTRL = reg(1, 0x04, 0x05)
-FILTER_CTRL = reg(1, 0x06, 0x07)
-UART_CTRL = reg(1, 0x08, 0x09)
-GLOB_CMD = reg(1, 0x0A, 0x0B)
-BURST_CTRL1 = reg(1, 0x0C, 0x0D)
-BURST_CTRL2 = reg(1, 0x0E, 0x0F)
-POL_CTRL = reg(1, 0x10, 0x11)
-DLT_CTRL = reg(1, 0x12, 0x13)
-ATTI_CTRL = reg(1, 0x14, 0x15)
-GLOB_CMD2 = reg(1, 0x16, 0x17)
-PROD_ID1 = reg(1, 0x6A)
-PROD_ID2 = reg(1, 0x6C)
-PROD_ID3 = reg(1, 0x6E)
-PROD_ID4 = reg(1, 0x70)
-VERSION = reg(1, 0x72)
-SERIAL_NUM1 = reg(1, 0x74)
-SERIAL_NUM2 = reg(1, 0x76)
-SERIAL_NUM3 = reg(1, 0x78)
-SERIAL_NUM4 = reg(1, 0x7A)
-WIN_CTRL = reg(0, 0x7E, 0x7F)
+    BURST = (0, 0x00, 0x01)
+    MODE_CTRL = (0, 0x02, 0x03)
+    DIAG_STAT = (0, 0x04, 0x05)
+    FLAG = (0, 0x06, 0x07)
+    GPIO = (0, 0x08, 0x09)
+    COUNT = (0, 0x0A, 0x0B)
+    TEMP_HIGH = (0, 0x0E, 0x0F)
+    TEMP_LOW = (0, 0x10, 0x11)
+    XGYRO_HIGH = (0, 0x12, 0x13)
+    XGYRO_LOW = (0, 0x14, 0x15)
+    YGYRO_HIGH = (0, 0x16, 0x17)
+    YGYRO_LOW = (0, 0x18, 0x19)
+    ZGYRO_HIGH = (0, 0x1A, 0x1B)
+    ZGYRO_LOW = (0, 0x1C, 0x1D)
+    XACCL_HIGH = (0, 0x1E, 0x1F)
+    XACCL_LOW = (0, 0x20, 0x21)
+    YACCL_HIGH = (0, 0x22, 0x23)
+    YACCL_LOW = (0, 0x24, 0x25)
+    ZACCL_HIGH = (0, 0x26, 0x27)
+    ZACCL_LOW = (0, 0x28, 0x29)
+    ID = (0, 0x4C, 0x4D)
+    XDLTA_HIGH = (0, 0x64, 0x65)
+    XDLTA_LOW = (0, 0x66, 0x67)
+    YDLTA_HIGH = (0, 0x68, 0x69)
+    YDLTA_LOW = (0, 0x6A, 0x6B)
+    ZDLTA_HIGH = (0, 0x6C, 0x6D)
+    ZDLTA_LOW = (0, 0x6E, 0x6F)
+    XDLTV_HIGH = (0, 0x70, 0x71)
+    XDLTV_LOW = (0, 0x72, 0x73)
+    YDLTV_HIGH = (0, 0x74, 0x75)
+    YDLTV_LOW = (0, 0x76, 0x77)
+    ZDLTV_HIGH = (0, 0x78, 0x79)
+    ZDLTV_LOW = (0, 0x7A, 0x7B)
+    SIG_CTRL = (1, 0x00, 0x01)
+    MSC_CTRL = (1, 0x02, 0x03)
+    SMPL_CTRL = (1, 0x04, 0x05)
+    FILTER_CTRL = (1, 0x06, 0x07)
+    UART_CTRL = (1, 0x08, 0x09)
+    GLOB_CMD = (1, 0x0A, 0x0B)
+    BURST_CTRL1 = (1, 0x0C, 0x0D)
+    BURST_CTRL2 = (1, 0x0E, 0x0F)
+    POL_CTRL = (1, 0x10, 0x11)
+    DLT_CTRL = (1, 0x12, 0x13)
+    PROD_ID1 = (1, 0x6A, 0x06B)
+    PROD_ID2 = (1, 0x6C, 0x6D)
+    PROD_ID3 = (1, 0x6E, 0x6F)
+    PROD_ID4 = (1, 0x70, 0x71)
+    VERSION = (1, 0x72, 0x73)
+    SERIAL_NUM1 = (1, 0x74, 0x75)
+    SERIAL_NUM2 = (1, 0x76, 0x77)
+    SERIAL_NUM3 = (1, 0x78, 0x79)
+    SERIAL_NUM4 = (1, 0x7A, 0x7B)
+    WIN_CTRL = (0, 0x7E, 0x7F)
 
-# List of registers
+    def __init__(self, winid, addr, addrh):
+        self.WINID = winid
+        self.ADDR = addr
+        self.ADDRH = addrh
 
-REGMAP = (
-    MODE_CTRL,
-    DIAG_STAT,
-    FLAG,
-    GPIO,
-    COUNT,
-    RANGE_OVER,
-    TEMP_HIGH,
-    TEMP_LOW,
-    XGYRO_HIGH,
-    XGYRO_LOW,
-    YGYRO_HIGH,
-    YGYRO_LOW,
-    ZGYRO_HIGH,
-    ZGYRO_LOW,
-    XACCL_HIGH,
-    XACCL_LOW,
-    YACCL_HIGH,
-    YACCL_LOW,
-    ZACCL_HIGH,
-    ZACCL_LOW,
-    ID,
-    XDLTA_HIGH,
-    XDLTA_LOW,
-    YDLTA_HIGH,
-    YDLTA_LOW,
-    ZDLTA_HIGH,
-    ZDLTA_LOW,
-    XDLTV_HIGH,
-    XDLTV_LOW,
-    YDLTV_HIGH,
-    YDLTV_LOW,
-    ZDLTV_HIGH,
-    ZDLTV_LOW,
-    SIG_CTRL,
-    MSC_CTRL,
-    SMPL_CTRL,
-    FILTER_CTRL,
-    UART_CTRL,
-    GLOB_CMD,
-    BURST_CTRL1,
-    BURST_CTRL2,
-    POL_CTRL,
-    DLT_CTRL,
-    ATTI_CTRL,
-    GLOB_CMD2,
-    PROD_ID1,
-    PROD_ID2,
-    PROD_ID3,
-    PROD_ID4,
-    VERSION,
-    SERIAL_NUM1,
-    SERIAL_NUM2,
-    SERIAL_NUM3,
-    SERIAL_NUM4,
-    WIN_CTRL,
-)
 
 # register value definitions
 
@@ -164,8 +102,7 @@ MODE_CMD = {
 EXT_SEL = {
     "GPIO": 0x00,
     "RESET": 0x01,
-    "TYPEA": 0x02,
-    "TYPEB": 0x03,
+    "TYPEB": 0x02,
 }
 
 DOUT_RATE = {
@@ -213,7 +150,6 @@ FILTER_SEL = {
 BAUD_RATE = {
     460800: 0,
     230400: 1,
-    921600: 2,
 }
 
 # scale factor and conversion constants

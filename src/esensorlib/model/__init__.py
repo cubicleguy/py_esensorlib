@@ -2,31 +2,44 @@
 model
 =====
 
-Provides modules for model definitions and constants that is imported by the SensorDevice
-class. 
+Modules for device model definitions and constants that is imported by the SensorDevice
+class
 
-model
+These definitions include the following:
+
+Definitions
+-----------
+UART protocol header and delimiter bytes
+Register names and addresses
+Specific register key, value selections
+Scale factors and constants for conversion
+Device specific timing delay constants
+
+Model
 -----
-mcore
+mcore (Used by all devices)
+
+IMU
+---
 mg320
 mg354
 mg364pdc0
 mg364pdca
+mg365pdc1
 mg365pdf1
-mg366pdg0
+mg366pdg0 (used also for mg330pdg0)
 mg370pdf1
-mg370pds0 
+mg370pdg0
+mg370pds0
+mg370pdt0
+mg570pr20
 
-These definitions the following:
+ACCL
+----
+ma352ad10
 
-Definitions
------------
-UART protocol characters
-UART delay timing
-Register names
-Register addresses
-Register map
-Dicts of specific register key, value selections
-Scale factors for conversion
-Device specific delay timing constants
+VIBE
+---
+ma342vd10
+
 """
