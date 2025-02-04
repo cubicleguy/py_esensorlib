@@ -1,0 +1,9 @@
+url_path,views_total,views_unique
+/cubicleguy/py_esensorlib,14,6
+/cubicleguy/py_esensorlib/tree/main/src/esensorlib,4,2
+/cubicleguy/py_esensorlib/blob/main/src/esensorlib/example/accl_logger.py,2,2
+/cubicleguy/py_esensorlib/tree/main/src/esensorlib/example,2,2
+/cubicleguy/py_esensorlib/tree/main/src/esensorlib/model,2,1
+/cubicleguy/py_esensorlib/blob/main/src/esensorlib/example/imu_logger.py,1,1
+/cubicleguy/py_esensorlib/blob/main/src/esensorlib/model/mg370pdg0.py,1,1
+/cubicleguy/py_esensorlib/releases,1,1
