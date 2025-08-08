@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -28,14 +28,16 @@ Contains:
 - Descriptive Exceptions specific to this package
 """
 
-import glob
 import struct
 import sys
 import time
 from collections import namedtuple
 from types import MappingProxyType
 
+from loguru import logger
+
 import serial
+import serial.tools.list_ports
 
 
 # Custom Exceptions
@@ -67,7 +69,7 @@ class UartPort:
     reset_input_buffer()
     get_raw16(regaddr, verbose)
     set_raw8(regaddr, regbyte, verbose)
-    response_OK(retries, verbose)
+    response_ok(retries, verbose)
     find_delimiter(ntries, retry_delay, verbose)
     """
 
@@ -92,7 +94,7 @@ class UartPort:
     TWRITERATE = 350e-6
     TREADRATE = 350e-6
 
-    def __init__(self, port, speed=460800, verbose=False):
+    def __init__(self, port, speed=460800, verbose=False, no_init=False):
         """
         Parameters
         ----------
@@ -102,6 +104,8 @@ class UartPort:
             Baudrate of sensor device connected to uart port
         verbose : bool
             If True outputs additional debug info
+        no_init : bool
+            If True does not call response_ok() during initialization
         """
 
         # If no serial port is specified, list available ports on PC
@@ -113,6 +117,7 @@ class UartPort:
         self._port = port
         self._speed = speed
         self._verbose = verbose
+        self._no_init = no_init
 
         # Create serial port object to device
         self.uart_epson = serial.Serial()
@@ -120,11 +125,12 @@ class UartPort:
         # Initialize serial port settings
         self.open(port=port, speed=speed)
 
-        # Check for device
-        if not self.response_ok(verbose=verbose):
-            raise IOError(
-                "Cannot send/receive commands with device:" f"{port} @ {speed} baud"
-            )
+        if no_init is False:
+            # Check for device
+            if not self.response_ok(verbose=verbose):
+                raise IOError(
+                    "Cannot send/receive commands with device:" f"{port} @ {speed} baud"
+                )
 
     def __repr__(self):
         cls = self.__class__.__name__
@@ -132,7 +138,8 @@ class UartPort:
             [
                 f"{cls}(port='{self._port}', ",
                 f"speed={self._speed}, ",
-                f"verbose={self._verbose})",
+                f"verbose={self._verbose}, ",
+                f"no_init={self._no_init})",
             ]
         )
         return string_val
@@ -144,6 +151,7 @@ class UartPort:
                 f"\n  Port: {self._port}",
                 f"\n  Speed (baud): {self._speed}",
                 f"\n  Verbose: {self._verbose}",
+                f"\n  No_Init: {self._no_init}",
             ]
         )
         return string_val
@@ -160,28 +168,9 @@ class UartPort:
     def list_ports():
         """List serial ports"""
 
-        if sys.platform.startswith("win"):
-            ports = ["COM" + str(i + 1) for i in range(256)]
-
-        elif sys.platform.startswith("linux") or sys.platform.startswith("cygwin"):
-            # this is to exclude your current terminal "/dev/tty"
-            ports = glob.glob("/dev/tty[A-Za-z]*")
-
-        elif sys.platform.startswith("darwin"):
-            ports = glob.glob("/dev/tty.*")
-
-        else:
-            raise EnvironmentError("Unsupported platform")
-
-        result = []
-        for port in ports:
-            try:
-                s_ports = serial.Serial(port)
-                s_ports.close()
-                result.append(port)
-            except (OSError, serial.SerialException):
-                pass
-        return result
+        return [
+            comport.device.upper() for comport in serial.tools.list_ports.comports()
+        ]
 
     def open(self, port, speed, verbose=True):
         """Opens and initializes serial port of device
@@ -210,7 +199,13 @@ class UartPort:
                 or sys.platform.startswith("cygwin")
                 or sys.platform.startswith("darwin")
             ):
-                self.uart_epson.set_low_latency_mode(True)
+                try:
+                    self.uart_epson.set_low_latency_mode(True)
+                except ValueError as err:
+                    logger.error(
+                        f"** Could not enable low_latency mode (permissions?): {err}"
+                    )
+
             if verbose:
                 print(
                     " ".join(
@@ -223,7 +218,7 @@ class UartPort:
                     )
                 )
         except (OSError, serial.SerialException) as err:
-            print(
+            logger.error(
                 f"** Could not open: {self.uart_epson.port} @ {self.uart_epson.baudrate} baud"
             )
             print("\nAvailable COM ports:")
@@ -251,7 +246,7 @@ class UartPort:
         except AttributeError:
             pass
         except (OSError, serial.SerialException) as err:
-            print(
+            logger.error(
                 f"** Could not close: {self.uart_epson.portstr} @ {self.uart_epson.baudrate} baud"
             )
             raise IOError from err
@@ -300,7 +295,7 @@ class UartPort:
             )
 
         if verbose:
-            print(f"REG[0x{regaddr & 0xFE:02X}] -> 0x{rdata.DATA:04X}")
+            logger.debug(f"REG[0x{regaddr & 0xFE:02X}] -> 0x{rdata.DATA:04X}")
 
         return rdata.DATA
 
@@ -312,7 +307,7 @@ class UartPort:
         time.sleep(self.TWRITERATE)
 
         if verbose:
-            print(f"REG[0x{regaddr & 0xFF:02X}] <- 0x{regbyte:02X}")
+            logger.debug(f"REG[0x{regaddr & 0xFF:02X}] <- 0x{regbyte:02X}")
 
     def response_ok(self, retries=5, verbose=False):
         """
@@ -339,7 +334,7 @@ class UartPort:
                 # If RX buffer does not clear or ID check fails, try to
                 # send a DELIMITER byte and go thru loop again
                 if verbose:
-                    print("Send DELIMITER byte")
+                    logger.debug("Send DELIMITER byte")
                 self.write_bytes(struct.pack("B", self.DELIMITER))
                 _count = _count + 1
             return False
@@ -352,16 +347,16 @@ class UartPort:
         Returns False if ntries exceeded
         """
 
+        if verbose:
+            logger.debug("Searching for DELIMITER...")
         _try = 0
         while _try < ntries:
             if self.in_waiting() > 0:
                 # Read 1 byte and search for DELIMITER
                 data = self.read_bytes(1)
-                if verbose:
-                    sys.stdout.write(".")
                 if self.DELIMITER in data:
                     if verbose:
-                        sys.stdout.write("!\n")
+                        logger.debug("Found DELIMITER...")
                     return True
             _try = _try + 1
         return False
@@ -380,11 +375,11 @@ class UartPort:
                     # Longer than slowest sample_rate is 15.625Hz
                     time.sleep(retry_delay)
                     if verbose:
-                        print(f"RX {_rxcount}: {self.in_waiting()} bytes")
+                        logger.debug(f"RX {_rxcount}: {self.in_waiting()} bytes")
                 _rxcount = _rxcount + 1
             if self.in_waiting() == 0:
                 return True
-            print(
+            logger.warning(
                 "** Rx Buffer contains data after reset_input_buffer() "
                 "Is device in SAMPLING mode?"
             )

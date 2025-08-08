@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -22,13 +22,16 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Sensor Device class is composed of classes for accelerometer, vibration sensor, IMU, UartPort
+"""Sensor Device class is composed of classes for accelerometer, vibration sensor,
+   IMU, UartPort
 Contains:
 - SensorDevice() class
 """
 
 import importlib
 from types import MappingProxyType
+
+from loguru import logger
 
 from esensorlib import uart_port, spi_port, reg_interface, accl_fn, imu_fn, vib_fn
 
@@ -55,57 +58,65 @@ class SensorDevice:
 
     Methods
     -------
-    get_model_definitions(verbose=False)
+    get_model_definitions(prod_id)
         Return object containing module imported for device model definitions
 
-    get_sensor_fn(verbose=False)
+    get_sensor_fn(verbose)
         Return AcclFn(), ImuFn(), VibFn() object based on model type
 
-    get_reg(winnum, regaddr, verbose=False)
+    get_regdump(columns, verbose)
+        Read all registers and return the values formatted in N columns
+
+    get_reg(winnum, regaddr, verbose)
         16-bit read from specified register address
 
-    set_reg(winnum, regaddr, write_byte, verbose=False)
+    set_reg(winnum, regaddr, write_byte, verbose)
         8-bit write to specified register address
 
     set_config(**cfg)
         Configure device from key, value parameters
 
-    init_check(verbose=False)
+    init_check(verbose)
         Check if HARD_ERR (hardware error) is reported
         Usually performed once after startup
 
-    do_selftest(verbose=False)
+    do_selftest(verbose)
         Perform self-test and check if ST_ERR (self-test error) is reported
 
-    do_softreset(verbose=False)
+    do_softreset(verbose)
         Perform software reset
 
-    test_flash(verbose=False)
+    test_flash(verbose)
         Perform self-test on flash and return result
 
-    backup_flash(verbose=False)
+    backup_flash(verbose)
         Perform flash backup of registers and return result
 
-    init_backup(verbose=False)
+    init_backup(verbose)
         Restore flash to factory default and return result
 
-    dump_reg(columns, verbose=False)
-        Read all registers and return the values formatted in N columns
-
-    goto(mode, post_delay, verbose=False)
+    goto(mode, post_delay, verbose)
         Set device to CONFIG or SAMPLING mode
 
-    get_mode(verbose=False)
+    get_mode(verbose)
         Return device mode status either CONFIG or SAMPLING
 
-    read_sample()
+    read_sample(verbose)
         Return scaled burst sample of sensor data
 
-    read_sample_unscaled()
+    read_sample_unscaled(verbose)
         Return unscaled burst sample of sensor data
     """
 
-    def __init__(self, port, speed=460800, if_type="uart", model="auto", verbose=False):
+    def __init__(
+        self,
+        port,
+        speed=460800,
+        if_type="uart",
+        model="auto",
+        verbose=False,
+        no_init=False,
+    ):
         """
         Parameters
         ----------
@@ -119,54 +130,74 @@ class SensorDevice:
             Model of sensor device. Set to auto for auto-detect
         verbose : bool
             If True outputs additional debug info
+        no_init : bool
+            If True object is created without device register access.
+            This is intended for devices that are already configured
+            and flashed with AUTO_START, and set_config() must be
+            specified with all device configuration to read & process
+            sensor burst data
         """
 
         self._port = port
         self._speed = speed
-        self._if_type = if_type
+        self._if_type = if_type.lower()
         self._model = model.upper()
         self._verbose = verbose
+        self._no_init = no_init
+        self._cfg = {}  # place holder - updated in set_config()
 
         # UartPort() or SpiPort() instance depends on if_type
         # SpiPort is just a stub and not implemented yet
-        if if_type.lower() == "uart":
-            self.port_io = uart_port.UartPort(port, speed, verbose)
-        elif if_type.lower() == "spi":
-            self.port_io = spi_port.SpiPort(port, speed, verbose)
+        # when no_init is enabled, detecting device routine is
+        # not performed when port to device is opened
+        if self._if_type == "uart":
+            self.port_io = uart_port.UartPort(
+                self._port, self._speed, self._verbose, self._no_init
+            )
+        elif self._if_type == "spi":
+            self.port_io = spi_port.SpiPort(
+                self._port, self._speed, self._verbose, self._no_init
+            )
         else:
-            raise IOError(f"** Unsupported if_type specified {if_type}")
+            raise IOError(f"** Unsupported if_type specified {self._if_type}")
 
         # RegInterface() instance
-        self.regif = reg_interface.RegInterface(self.port_io, verbose)
+        self.regif = reg_interface.RegInterface(self.port_io, self._verbose)
 
-        # Create _info dict from UartPort() or SpiPort() instance,
+        # Create _info dict of UartPort() or SpiPort() instance,
         # if_type, model
         self._info = {
             "port_io": self.port_io,
             "if_type": self._if_type,
             "model": self._model,
-            # info from UartPort() or SpiPort() instance
+            # from UartPort() or SpiPort() info
             "port_io_info": self.port_io.info,
         }
+        # For no_init, do not read device registers instead
+        # return empty values
+        if self._no_init:
+            self._device_info = {
+                "prod_id": None,
+                "version_id": None,
+                "serial_id": None,
+            }
+        else:
+            # Read registers to identify Device PROD_ID, VERSION, SER_NUM
+            self._device_info = self.regif.get_device_info(self._verbose)
 
-        # Identify Device PROD_ID, VERSION, SER_NUM
-        self._device_info = self.regif.get_device_info(verbose)
-
-        # Append device info to self_info
+        # Update _info with prod_id, version_id, serial_id from UartPort()
         self._info.update(self._device_info)
 
         # Import model definitions and constants, autodetect if model="auto"
         # UartPort().info or SpiPort().info must be defined before calling
         # get_model_definitions()
+        self._mdef = self.get_model_definitions(self._model)
 
-        self._mdef = self.get_model_definitions(model)
-
-        # Check for sensor type based on prod_id: ACCL, IMU, or Vibration
-        # Create sensor_fn from AcclFn(), ImuFn(), or VibFn() instance
+        # Return sensor object based on prod_id
+        # from AcclFn(), ImuFn(), or VibFn() instance
         # UartPort().info or SpiPort().info must be defined before calling
         # get_sensor_fn()
-
-        self.sensor_fn = self.get_sensor_fn(verbose)
+        self.sensor_fn = self.get_sensor_fn(self._verbose)
 
     def __repr__(self):
         cls = self.__class__.__name__
@@ -176,7 +207,8 @@ class SensorDevice:
                 f"speed={self._speed}, ",
                 f"if_type='{self._if_type}', ",
                 f"model='{self._model}', ",
-                f"verbose={self._verbose})",
+                f"verbose={self._verbose}, ",
+                f"no_init={self._no_init})",
             ]
         )
         return string_val
@@ -190,6 +222,7 @@ class SensorDevice:
                 f"\n  Interface Type: {self._if_type}",
                 f"\n  Model: {self._model}",
                 f"\n  Verbose: {self._verbose}",
+                f"\n  No_Init: {self._no_init}",
             ]
         )
         return string_val
@@ -220,19 +253,23 @@ class SensorDevice:
         return self._mdef
 
     def get_model_definitions(self, prod_id):
-        """Load user-specified model or auto-detect model definitions"""
-
+        """Load user-specified model or load auto-detect model definitions"""
         prod_id = prod_id.upper()
-        if prod_id == "AUTO":
+        # If no_init then set product ID for _info and _device_info based on
+        # user supplied parameter
+        if self._no_init is True:
+            self._info["prod_id"] = prod_id
+            self._device_info["prod_id"] = prod_id
+        elif prod_id == "AUTO":
             detected = self._info.get("prod_id") or "UNKNOWN"
             print(f"Detected: {detected}")
             prod_id = detected
         else:
             if prod_id != self._info.get("prod_id"):
                 print(
-                    f"Overriding detected {self._info['prod_id']} with specified {prod_id}"
+                    f"Overriding detected {self._info['prod_id']} with user-specified {prod_id}"
                 )
-            # Override detected prodid
+            # Override detected product id
             self._info["prod_id"] = prod_id
             self._device_info["prod_id"] = prod_id
 
@@ -249,7 +286,7 @@ class SensorDevice:
             )
             return model_def
         except ModuleNotFoundError as exc:
-            print(
+            logger.error(
                 f"** Cannot load model definitions. Unknown device model detected: {prod_id}"
             )
             raise IOError from exc
@@ -259,7 +296,11 @@ class SensorDevice:
 
         _prod_id = self._info.get("prod_id")
         is_imu = _prod_id.startswith("G")
-        is_accl = _prod_id.startswith("A352") or _prod_id.startswith("A552AR")
+        is_accl = (
+            _prod_id.startswith("A352")
+            or _prod_id.startswith("A552AR")
+            or _prod_id.startswith("A370")
+        )
         is_vib = _prod_id.startswith("A342") or _prod_id.startswith("A542VR")
 
         if is_imu:
@@ -309,7 +350,8 @@ class SensorDevice:
     def set_config(self, **cfg):
         """redirect to ImuFn(), AcclFn(), VibFn() instance.
         Configure device based on parameters."""
-        self.sensor_fn.set_config(**cfg)
+        self._cfg = cfg
+        self.sensor_fn.set_config(**self._cfg)
 
     def init_check(self, verbose=False):
         """redirect to ImuFn(), AcclFn(), VibFn() instance.

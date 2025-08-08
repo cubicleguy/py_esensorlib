@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -31,6 +31,8 @@ Contains:
 import struct
 import time
 from types import MappingProxyType
+
+from loguru import logger
 
 
 # Custom Exceptions
@@ -71,7 +73,7 @@ class VibFn:
     Attributes
     ----------
     info : MappingProxyType
-        dict of device ID and port information
+        dict of device ID information
     status : MappingProxyType
         dict of device status
     burst_out : MappingProxyType
@@ -85,7 +87,7 @@ class VibFn:
 
     Methods
     -------
-    get_reg(winnum, regaddr, verbose=False)
+    get_reg(winnum, regaddr, verbose)
         16-bit read from specified WIN_ID and register address
 
     set_reg(winnum, regaddr, write_byte, verbose=False)
@@ -94,41 +96,38 @@ class VibFn:
     set_config(**cfg)
         Configure device from key, value parameters
 
-    init_check(verbose=False)
+    set_baudrate(baud, verbose)
+        Configure device baudrate setting NOTE: This takes immediate effect.
+
+    init_check(verbose)
         Check if HARD_ERR (hardware error) is reported
         Usually performed once after startup
 
-    do_selftest(verbose=False)
+    do_selftest(verbose)
         Perform self-test and check if ST_ERR (self-test error) is reported
 
-    do_softreset(verbose=False)
+    do_softreset(verbose)
         Perform software reset
 
-    test_flash(verbose=False)
+    do_flashtest(verbose)
         Perform self-test on flash and return result
 
-    backup_flash(verbose=False)
+    backup_flash(verbose)
         Perform flash backup of registers and return result
 
-    init_backup(verbose=False)
+    init_backup(verbose)
         Restore flash to factory default and return result
 
-    dump_reg(columns, verbose=False)
-        Read all registers and return the values formatted in N columns
-
-    set_baudrate(baud, verbose=False)
-        Configure device baudrate setting NOTE: This takes immediate effect.
-
-    goto(mode, post_delay, verbose=False)
+    goto(mode, post_delay, verbose)
         Set device to CONFIG or SAMPLING mode
 
-    get_mode(verbose=False)
-        Return device mode status either CONFIG or SAMPLING
+    get_mode(verbose)
+        Return device mode status as either CONFIG or SAMPLING
 
-    read_sample()
+    read_sample(verbose)
         Return scaled burst sample of sensor data
 
-    read_sample_unscaled()
+    read_sample_unscaled(verbose)
         Return unscaled burst sample of sensor data
     """
 
@@ -136,12 +135,12 @@ class VibFn:
         """
         Parameters
         ----------
-        obj_regif : RegInterface() instance passed from SensorDevice() instance
-            Register interface object
+        obj_regif : RegInterface() instance
+            Register interface object passed from SensorDevice() instance
         obj_mdef : module
             Model definitions passed from SensorDevice() instance
         device_info : dict
-            prod_id, version_id, serial_id values
+            prod_id, version_id, serial_id as key, value pairs
         verbose : bool
             If True outputs additional debug info
         """
@@ -154,9 +153,13 @@ class VibFn:
             "version_id": None,
             "serial_id": None,
         }
+
         self._verbose = verbose
 
-        # Stores device config status
+        # _cfg is updated when set_config(**cfg) called
+        self._cfg = {}
+
+        # Default device config status
         self._status = {
             "output_sel": "VELOCITY_RMS",
             "dout_rate_rmspp": 1,
@@ -196,7 +199,7 @@ class VibFn:
             [
                 f"{cls}(obj_regif={repr(self.regif)}, ",
                 f"obj_mdef={repr(self.model_def)}, ",
-                f"device_info=({self._device_info}), ",
+                f"device_info={self._device_info}, ",
                 f"verbose={self._verbose})",
             ]
         )
@@ -260,33 +263,25 @@ class VibFn:
 
         Parameters
         ----------
-        "output_sel": str,
-        "dout_rate_rmspp": int,
-        "update_rate_rmspp": int,
-        "ndflags": bool,
-        "tempc": bool,
-        "sensx": bool,
-        "sensy": bool,
-        "sensz": bool,
-        "counter": bool,
-        "chksm": bool,
-        "is_tempc16": bool,
-        "auto_start": bool,
-        "uart_auto": bool,
-        "verbose" : bool, If True outputs additional debug info
+        cfg : dict of keyword arguments
+            Optional keyword arguments
         """
 
-        is_dict = isinstance(cfg, dict)
-        is_none = cfg is None
-        if not (is_dict or is_none):
-            raise TypeError(f"** cfg parameters must be **kwargs or None: {cfg}")
+        if not cfg:
+            logger.warning("** No cfg parameters provided using defaults")
 
-        verbose = cfg.get("verbose", False)
-        self.goto("config", verbose=verbose)
-        self._config_basic(**cfg)
-        self._get_burst_config(verbose=verbose)
+        self._cfg = cfg
+
+        verbose = self._cfg.get("verbose", False)
         if verbose:
-            print(f"Status: {self._status}")
+            logger.debug(f"set_config({cfg})")
+
+        # Place device in CONFIG mode, if not already
+        self.goto("config", verbose=verbose)
+        self._config_basic(verbose)
+        self._get_burst_config(verbose)
+        if verbose:
+            logger.debug(f"vib_fn.status: {self.status}")
 
     def set_baudrate(self, baud, verbose=False):
         """Configure Baud Rate
@@ -303,6 +298,9 @@ class VibFn:
             If True outputs additional debug info
         """
 
+        if verbose:
+            logger.debug(f"Set Baud Rate = {baud}")
+
         try:
             writebyte = self.mdef.BAUD_RATE[baud]
             self.set_reg(
@@ -311,10 +309,8 @@ class VibFn:
                 writebyte,
                 verbose,
             )
-            if verbose:
-                print(f"Set Baud Rate = {baud}")
         except KeyError as err:
-            print(f"** Invalid BAUD_RATE, Set Baud Rate = {baud}")
+            logger.error(f"** Invalid BAUD_RATE: {baud}")
             raise InvalidCommandError from err
 
     def init_check(self, verbose=False):
@@ -337,13 +333,11 @@ class VibFn:
             result = self.get_reg(
                 self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR, verbose
             )
-            if verbose:
-                print(".", end="")
         result = self.get_reg(
             self.reg.DIAG_STAT1.WINID, self.reg.DIAG_STAT1.ADDR, verbose
         )
         if verbose:
-            print("VIB Startup Check")
+            logger.debug("VIB Startup Check")
         result = result & 0x00E0
         if result:
             raise HardwareError("** Hardware Failure. HARD_ERR bits")
@@ -370,8 +364,6 @@ class VibFn:
         while (result & 0x8000) != 0:
             # Wait for EXI_TEST = 0
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         print("FLASH_TEST")
         self.set_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDRH, 0x08, verbose)
@@ -380,8 +372,6 @@ class VibFn:
         while (result & 0x0800) != 0:
             # Wait for FLASH_TEST = 0
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         print("ACC_TEST, TEMP_TEST, VDD_TEST")
         self.set_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDRH, 0x07, verbose)
@@ -390,9 +380,6 @@ class VibFn:
         while (result & 0x0700) != 0:
             # Wait for ACC_TEST, TEMP_TEST, VDD_TEST = 0
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
-
         result_diag1 = self.get_reg(
             self.reg.DIAG_STAT1.WINID, self.reg.DIAG_STAT1.ADDR, verbose
         )
@@ -402,7 +389,8 @@ class VibFn:
 
         if result_diag1 or result_diag2:
             raise SelfTestError(
-                f"** Self Test Failure. DIAG_STAT1={result_diag1: 04X}, DIAG_STAT2={result_diag2: 04X}"
+                f"** Self Test Failure. DIAG_STAT1={result_diag1: 04X}, "
+                f"DIAG_STAT2={result_diag2: 04X}"
             )
         print("Self Test completed with no errors")
 
@@ -433,14 +421,11 @@ class VibFn:
             non-zero results indicates FLASH_ERR
         """
 
-        print("FLASH_TEST")
         self.set_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDRH, 0x08, verbose)
         time.sleep(self.mdef.SELFTEST_FLASH_DELAY_S)
         result = 0x0800
         while (result & 0x0800) != 0:
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT1.WINID, self.reg.DIAG_STAT1.ADDR, verbose
@@ -469,8 +454,6 @@ class VibFn:
         result = 0x0008
         while (result & 0x0008) != 0:
             result = self.get_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT1.WINID, self.reg.DIAG_STAT1.ADDR, verbose
@@ -494,30 +477,33 @@ class VibFn:
             non-zero results indicates FLASH_BU_ERR
         """
 
+        if not self.mdef.HAS_FEATURE.get("INITIAL_BACKUP"):
+            logger.warning("Initial backup function not supported. Bypassing.")
+            return
+
         self.set_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR, 0x04, verbose)
         time.sleep(self.mdef.FLASH_BACKUP_DELAY_S)
         result = 0x0010
         while (result & 0x0010) != 0:
             result = self.get_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT1.WINID, self.reg.DIAG_STAT1.ADDR, verbose
         )
         result = result & 0x0001
         if result:
-            raise FlashBackupError("** Flash Backup Failure. FLASH_BU_ERR bit")
+            raise FlashBackupError("** Initial Backup Failure. FLASH_BU_ERR bit")
         print("Initial Backup Completed")
 
-    def goto(self, mode, post_delay=0.2, verbose=False):
+    def goto(self, mode="config", post_delay=0.2, verbose=False):
         """Set MODE_CMD to either CONFIG or SAMPLING or SLEEP mode.
 
-        NOTE: SLEEP mode cannot be exited from without EXT signal or HW reset
-
+        NOTE: SLEEP mode cannot be exited without EXT signal or HW reset
         If entering SAMPLING, store the state of burst configuration
+        update _status
+        if no_init, avoid register accesses
         NOTE: Device must be in SAMPLING mode to call read_sample()
-        NOTE: Device must be in CONFIG mode for most functions
+        NOTE: Device must be in CONFIG mode for most configuration functions
 
         Parameters
         ----------
@@ -540,12 +526,21 @@ class VibFn:
             )
 
         mode = mode.upper()
+        self._status["is_config"] = mode == "CONFIG"
+
+        if verbose:
+            logger.debug(f"MODE_CMD = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning(
+                "--no_init option specified, bypass setting in MODE_CTRL register"
+            )
+            return
+
         try:
-            # When entering SAMPLING mode, update the
-            # self._burst_out & self._status from
-            # BURST_CTRL1 & BURST_CTRL2 register settings
+            # When entering SAMPLING mode, get burst read configuration
             if mode == "SAMPLING":
-                self._get_burst_config(verbose=verbose)
+                self._get_burst_config(verbose)
 
             self.set_reg(
                 self.reg.MODE_CTRL.WINID,
@@ -558,11 +553,9 @@ class VibFn:
             # flush any pending incoming burst data
             if mode == "CONFIG":
                 self.regif.port_io.reset_input_buffer()
-            if verbose:
-                print(f"MODE_CMD = {mode}")
-            self._status["is_config"] = mode == "CONFIG"
+
         except KeyError as err:
-            print("** Invalid MODE_CMD")
+            logger.error("** Invalid MODE_CMD")
             raise InvalidCommandError from err
 
     def get_mode(self, verbose=False):
@@ -592,7 +585,7 @@ class VibFn:
         ) >> 10
         self._status["is_config"] = result == 0x01
         if verbose:
-            print(f"MODE_CMD = {result}")
+            logger.debug(f"MODE_CMD = {result}")
         return result
 
     def read_sample(self, verbose=False):
@@ -609,9 +602,9 @@ class VibFn:
         Returns
         -------
         tuple
-            tuple containing single set of sensor burst data with or
-            without scale factor applied
-            () if burst data is malformed or device not in SAMPLING
+            tuple containing single set of sensor burst data with
+            scale factor applied or () if burst data is malformed
+            or device not in SAMPLING
 
         Raises
         -------
@@ -640,7 +633,7 @@ class VibFn:
             print("Stop reading sensor")
             raise
         except IOError:
-            print("** Failure reading sensor sample")
+            logger.error("** Failure reading sensor sample")
             raise
 
     def read_sample_unscaled(self, verbose=False):
@@ -656,10 +649,10 @@ class VibFn:
 
         Returns
         -------
-        tuple or ()
-            tuple containing single set of sensor burst data with or
-            without scale factor applied
-            None if burst data is malformed or device not in SAMPLING
+        tuple
+            tuple containing single set of sensor burst data
+            without scale factor applied or () if burst data
+            is malformed or device not in SAMPLING
 
         Raises
         -------
@@ -688,12 +681,13 @@ class VibFn:
             print("Stop reading sensor")
             raise
         except IOError:
-            print("** Failure reading sensor sample")
+            logger.error("** Failure reading sensor sample")
             raise
 
     def _get_burst_config(self, verbose=False):
-        """Read BURST_CTRL to update
-        _b_struct, _burst_out, _burst_fields
+        """Typically read from BURST_CTRL.
+        For no_init, read from self._cfg to update
+        _burst_out, _b_struct, _burst_fields
 
         Parameters
         ----------
@@ -701,29 +695,45 @@ class VibFn:
             If True outputs additional debug info
         """
 
-        tmp1 = self.get_reg(
-            self.reg.BURST_CTRL.WINID, self.reg.BURST_CTRL.ADDR, verbose
-        )
+        no_init = self._cfg.get("no_init", False)
 
-        self._burst_out["ndflags"] = bool(tmp1 & 0x8000)
-        self._burst_out["tempc"] = bool(tmp1 & 0x4000)
-        self._burst_out["sensx"] = bool(tmp1 & 0x0400)
-        self._burst_out["sensy"] = bool(tmp1 & 0x0200)
-        self._burst_out["sensz"] = bool(tmp1 & 0x0100)
-        self._burst_out["counter"] = bool(tmp1 & 0x0002)
-        self._burst_out["chksm"] = bool(tmp1 & 0x0001)
+        if not no_init:
+            tmp1 = self.get_reg(
+                self.reg.BURST_CTRL.WINID, self.reg.BURST_CTRL.ADDR, verbose
+            )
+
+            self._burst_out["ndflags"] = bool(tmp1 & 0x8000)
+            self._burst_out["tempc"] = bool(tmp1 & 0x4000)
+            self._burst_out["sensx"] = bool(tmp1 & 0x0400)
+            self._burst_out["sensy"] = bool(tmp1 & 0x0200)
+            self._burst_out["sensz"] = bool(tmp1 & 0x0100)
+            self._burst_out["counter"] = bool(tmp1 & 0x0002)
+            self._burst_out["chksm"] = bool(tmp1 & 0x0001)
+        else:
+            logger.warning(
+                "--no_init option assumes device is already configured "
+                "with user-specified settings and AUTO_START "
+                "enabled."
+            )
+            self._burst_out["ndflags"] = self._cfg.get("ndflags", False)
+            self._burst_out["tempc"] = self._cfg.get("tempc", False)
+            self._burst_out["sensx"] = True
+            self._burst_out["sensy"] = True
+            self._burst_out["sensz"] = True
+            self._burst_out["counter"] = bool(self._cfg.get("counter", ""))
+            self._burst_out["chksm"] = self._cfg.get("chksm", False)
 
         self._b_struct = self._get_burst_struct_fmt()
         self._burst_fields = self._get_burst_fields()
 
         if verbose:
-            print(f"_get_burst_struct_fmt(): {self._b_struct}")
-            print(f"_get_burst_fields(): {self._burst_fields}")
-            print(f"_get_burst_config(): {self._burst_out}")
+            logger.debug(f"burst_out: {self._burst_out}")
+            logger.debug(f"burst_struct_fmt: {self._b_struct}")
+            logger.debug(f"burst_fields: {self._burst_fields}")
 
     def _get_burst_struct_fmt(self):
         """Returns the struct format for burst packet
-        based on _burst_out (from BURST_CTRL)
+        based on _burst_out
 
         Returns
         -------
@@ -756,7 +766,7 @@ class VibFn:
         return "".join(struct_list)
 
     def _get_burst_fields(self):
-        """Returns enabled burst_fields based on _burst_out
+        """Returns tuple containing enabled burst_fields based on _burst_out
 
         Returns
         -------
@@ -782,38 +792,7 @@ class VibFn:
 
         return tuple(burst_fields)
 
-    def _set_ndflags(self, burst_cfg, verbose=False):
-        """Configure SIG_CTRL
-        NOTE: Not used when UART_AUTO is enabled
-
-        Parameters
-        ----------
-        burst_cfg : dict
-            parses burst flags from dict to enabled in SIG_CTRL
-        verbose : bool
-            If True outputs additional debug info
-        """
-        # If UART_AUTO then ignore setting SIG_CTRL
-        if self._status["uart_auto"]:
-            return
-
-        try:
-            # SIG_CTRL
-            _wval = (
-                int(burst_cfg["tempc"]) << 7
-                | int(burst_cfg["sensx"]) << 3
-                | int(burst_cfg["sensy"]) << 2
-                | int(burst_cfg["sensz"]) << 1
-            )
-            self.set_reg(
-                self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDRH, _wval, verbose
-            )
-
-        except KeyError as err:
-            print("** Invalid SIG_CTRL setting")
-            raise InvalidCommandError from err
-
-    def _set_output_sel(self, mode=None, verbose=False):
+    def _set_output_sel(self, mode="DISP_RMS", verbose=False):
         """Configure Output Selection function in SIG_CTRL LOW
 
         Parameters
@@ -825,13 +804,24 @@ class VibFn:
             If True outputs additional debug info
         Raises
         -------
+        HardwareError
+            When OUTPUT_SEL fails
         InvalidCommandError
             When unsupported rate is specified
         """
 
+        mode = mode.upper()
+        self._status["output_sel"] = mode
+
+        if verbose:
+            logger.debug(f"Set Output Select = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting OUTPUT_SEL register")
+            return
+
         try:
-            mode = mode.upper()
-            _output_sel = self.mdef.OUTPUT_SEL.get(mode, "DISP_RMS")
+            _output_sel = self.mdef.OUTPUT_SEL.get(mode, 4)  # default 4 = DISP_RMS
             _tmp = self.get_reg(
                 self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDR, verbose
             )
@@ -851,14 +841,11 @@ class VibFn:
             result = result & 0x00E0
             if result:
                 raise HardwareError("** Output Select Failure. HARD_ERR bits")
-            self._status["output_sel"] = mode
-            if verbose:
-                print(f"OUTPUT_SEL = {mode}")
         except KeyError as err:
             print(f"** Invalid OUTPUT_SEL, Output sel = {mode}")
             raise InvalidCommandError from err
 
-    def _set_output_rate(self, dout_rate, verbose=False):
+    def _set_output_rate(self, dout_rate=1, verbose=False):
         """Configure Output Data Rate for DOUT_RATE_RMSPP
         Only valid for RMS or Peak-to-Peak
         If RAW mode, this is ignored
@@ -871,12 +858,24 @@ class VibFn:
             If True outputs additional debug info
         """
 
+        self._status["dout_rate_rmspp"] = dout_rate
+
+        if verbose:
+            logger.debug(f"Set Output Rate = {dout_rate}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting DOUT_RATE_RMSPP register")
+            return
+
         if self._status.get("output_sel") in ("VELOCITY_RAW", "DISP_RAW"):
-            print("RAW mode output detected. Bypass setting DOUT_RATE_RMSPP")
+            if verbose:
+                logger.warning(
+                    "RAW mode output detected. Bypass setting DOUT_RATE_RMSPP"
+                )
             return
 
         if dout_rate < 1 or dout_rate > 255:
-            print(
+            logger.warning(
                 "DOUT_RATE_RMSPP must be 1 ~ 255 (inclusive). Bypass setting DOUT_RATE_RMSPP"
             )
             return
@@ -887,11 +886,8 @@ class VibFn:
             dout_rate,
             verbose,
         )
-        self._status["dout_rate_rmspp"] = dout_rate
-        if verbose:
-            print(f"Set Output Rate = {dout_rate}")
 
-    def _set_update_rate(self, update_rate, verbose=False):
+    def _set_update_rate(self, update_rate=4, verbose=False):
         """Configure Update Rate for UPDATE_RATE_RMSPP
         Only valid for RMS or Peak-to-Peak
         If RAW mode, this is ignored
@@ -904,12 +900,24 @@ class VibFn:
             If True outputs additional debug info
         """
 
+        self._status["update_rate_rmspp"] = update_rate
+
+        if verbose:
+            logger.debug(f"Set Update Rate = {update_rate}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting UPDATE_RATE_RMSPP register")
+            return
+
         if self._status.get("output_sel") in ("VELOCITY_RAW", "DISP_RAW"):
-            print("RAW mode output detected. Bypass setting UPDATE_RATE_RMSPP")
+            if verbose:
+                logger.warning(
+                    "RAW mode output detected. Bypass setting UPDATE_RATE_RMSPP"
+                )
             return
 
         if update_rate < 0 or update_rate > 15:
-            print(
+            logger.warning(
                 "UPDATE_RATE_RMSPP must be 0 ~ 15 (inclusive). Bypass setting UPDATE_RATE_RMSPP"
             )
             return
@@ -920,12 +928,10 @@ class VibFn:
             update_rate,
             verbose,
         )
-        self._status["update_rate_rmspp"] = update_rate
-        if verbose:
-            print(f"Set Update Rate = {update_rate}")
 
-    def _set_uart_mode(self, mode, verbose=False):
-        """Configure AUTO_START and UART_AUTO bits in UART_CTRL
+    def _set_uart_mode(self, mode=0x02, verbose=False):
+        """Configure AUTO_START and UART_AUTO bits in UART_CTRL register,
+           update _status, and if no_init do not write to registers
 
         Parameters
         ----------
@@ -934,13 +940,20 @@ class VibFn:
         verbose : bool
             If True outputs additional debug info
         """
+
+        self._status["auto_start"] = (mode & 0x02) == 2
+        self._status["uart_auto"] = (mode & 0x01) == 1
+
+        if verbose:
+            logger.debug(f"UART Mode = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting UART_CTRL register")
+            return
+
         self.set_reg(
             self.reg.UART_CTRL.WINID, self.reg.UART_CTRL.ADDR, mode & 0x03, verbose
         )
-        self._status["auto_start"] = (mode & 0x02) == 2
-        self._status["uart_auto"] = (mode & 0x01) == 1
-        if verbose:
-            print(f"IMU UART Mode = {mode}")
 
     def _set_ext_pol(self, act_low=False, verbose=False):
         """Configure EXT pin active low
@@ -953,6 +966,20 @@ class VibFn:
             If True outputs additional debug info
         """
 
+        if not self.mdef.HAS_FEATURE.get("EXT_PIN"):
+            if verbose:
+                logger.warning("EXT pin function not supported")
+            return
+
+        self._status["ext_pol"] = act_low
+
+        if verbose:
+            logger.debug(f"EXT_POL Active LOW = {act_low}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting EXT_POL in MSC_CTRL register")
+            return
+
         _tmp = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR, verbose)
         self.set_reg(
             self.reg.MSC_CTRL.WINID,
@@ -960,12 +987,10 @@ class VibFn:
             (_tmp & 0xDF) | int(act_low) << 5,
             verbose,
         )
-        self._status["ext_pol"] = act_low
-        if verbose:
-            print(f"EXT_POL Active LOW = {act_low}")
 
     def _set_drdy_polarity(self, act_high=True, verbose=False):
-        """Configure DRDY to active HIGH
+        """Configure DRDY to active HIGH in MSC_CTRL
+           update _status, and if no_init do not write to registers
 
         Parameters
         ----------
@@ -975,6 +1000,15 @@ class VibFn:
             If True outputs additional debug info
         """
 
+        self._status["drdy_pol"] = act_high
+
+        if verbose:
+            logger.debug(f"DRDY_POL = {act_high}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting DRDY_POL in MSC_CTRL register")
+            return
+
         _tmp = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR, verbose)
         self.set_reg(
             self.reg.MSC_CTRL.WINID,
@@ -982,9 +1016,6 @@ class VibFn:
             (_tmp & 0xFD) | int(act_high) << 1,
             verbose,
         )
-        self._status["drdy_pol"] = act_high
-        if verbose:
-            print(f"DRDY_POL Active HIGH = {act_high}")
 
     def _set_tempc_format(self, bit16=True, verbose=False):
         """Configure temperature 16bit or 8bit
@@ -997,6 +1028,14 @@ class VibFn:
             If True outputs additional debug info
         """
 
+        self._status["is_tempc16"] = bit16
+        if verbose:
+            logger.debug(f"TEMP_SEL 16bit = {bit16}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting TEMP_SEL in SIG_CTRL register")
+            return
+
         _tmp = self.get_reg(self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDR, verbose)
         self.set_reg(
             self.reg.SIG_CTRL.WINID,
@@ -1004,48 +1043,14 @@ class VibFn:
             (_tmp & 0xFD) | int(bit16) << 1,
             verbose,
         )
-        self._status["is_tempc16"] = bit16
-        if verbose:
-            print(f"TEMP_SEL 16bit = {bit16}")
 
-    def _config_basic(
-        self,
-        output_sel="velocity_rms",
-        dout_rate_rmspp=1,
-        update_rate_rmspp=4,
-        ndflags=False,
-        tempc=False,
-        sensx=True,
-        sensy=True,
-        sensz=True,
-        counter=False,
-        chksm=False,
-        is_tempc16=True,
-        auto_start=False,
-        uart_auto=True,
-        ext_pol=False,
-        verbose=False,
-        **cfg,
-    ):
-        """Configure basic settings based on key, value parameters
+    def _config_basic(self, verbose=False):
+        """Configure basic device settings based on self._cfg dict
 
         Parameters
         ----------
-        "output_sel": str,
-        "dout_rate_rmspp": int,
-        "update_rate_rmspp": int,
-        "ndflags": bool,
-        "tempc": bool,
-        "sensx": bool,
-        "sensy": bool,
-        "sensz": bool,
-        "counter": bool,
-        "chksm": bool,
-        "is_tempc16": bool,
-        "auto_start": bool,
-        "uart_auto": bool,
-        "ext_pol": bool,
-        "verbose" : bool, If True outputs additional debug info
+        verbose : bool
+            If True outputs additional debug info
 
         Raises
         ----------
@@ -1053,61 +1058,48 @@ class VibFn:
             When unsupported configuration provided
         """
 
+        if verbose:
+            logger.debug(f"_config_basic:\nself._cfg:({self._cfg})")
+
         try:
-            self._set_ext_pol(ext_pol, verbose=verbose)
-            self._set_drdy_polarity(True, verbose=verbose)
-            if tempc:
-                self._set_tempc_format(is_tempc16, verbose=verbose)
-            self._set_output_sel(output_sel, verbose=verbose)
-            self._set_output_rate(dout_rate_rmspp, verbose=verbose)
-            self._set_update_rate(update_rate_rmspp, verbose=verbose)
+            # MSC_CTRL - EXT_SEL & DRDY
+            ext_pol = self._cfg.get("ext_pol", False)
+            self._set_ext_pol(ext_pol, verbose)
+            drdy_pol = self._cfg.get("drdy_pol", True)
+            self._set_drdy_polarity(drdy_pol, verbose)
+            # SIG_CTRL
+            if self._cfg.get("tempc", False):
+                is_tempc16 = self._cfg.get("is_tempc16", False)
+                self._set_tempc_format(is_tempc16, verbose)
 
-            _wval = int(auto_start) << 1 | int(uart_auto)
-            self._set_uart_mode(_wval, verbose=verbose)
+            output_sel = self._cfg.get("output_sel", "")
+            self._set_output_sel(output_sel, verbose)
+            # SMPL_CTRL
+            dout_rate_rmspp = self._cfg.get("dout_rate_rmspp", 0.1)
+            self._set_output_rate(dout_rate_rmspp, verbose)
 
-            # BURST_CTRL for cfg
-            _wval = (
-                int(ndflags) << 7
-                | int(tempc) << 6
-                | 0 << 5  # reserved
-                | 0 << 4  # reserved
-                | 0 << 3  # reserved
-                | int(sensx) << 2
-                | int(sensy) << 1
-                | int(sensz) << 0
-            )
-            self.set_reg(
-                self.reg.BURST_CTRL.WINID,
-                self.reg.BURST_CTRL.ADDRH,
-                _wval,
-                verbose=verbose,
-            )
-            self._status["ndflags"] = ndflags
-            self._status["tempc"] = tempc
-            self._status["sensx"] = sensx
-            self._status["sensy"] = sensy
-            self._status["sensz"] = sensz
-
-            # BURST_CTRL LOW for cfg
-            _wval = int(counter) << 1 | int(chksm)
-            self.set_reg(
-                self.reg.BURST_CTRL.WINID,
-                self.reg.BURST_CTRL.ADDR,
-                _wval,
-                verbose=verbose,
-            )
-            self._status["counter"] = counter
-            self._status["chksm"] = chksm
+            update_rate_rmspp = self._cfg.get("update_rate_rmspp", 4)
+            self._set_update_rate(update_rate_rmspp, verbose)
+            # UART_CTRL
+            auto_start = self._cfg.get("auto_start", False)
+            uart_auto = self._cfg.get("uart_auto", False)
+            mode = int(auto_start) << 1 | int(uart_auto)
+            self._set_uart_mode(mode, verbose)
+            # BURST_CTRL
+            self._config_burst_ctrl(verbose)
 
             print("Configured")
 
             # If UART_AUTO then ignore setting SIG_CTRL
-            if self._status.get("uart_auto", False):
+            if uart_auto:
                 return
 
-            # SIG_CTRL for cfg - tempc, Accl
+            # SIG_CTRL - tempc, sensX
             _wval = (
-                int(tempc) << 7 | int(sensx) << 3 | int(sensy) << 2 | int(sensz) << 1
+                int(self._cfg.get("tempc", False)) << 7
+                | int(self._cfg.get("sensx", False)) << 3
+                | int(self._cfg.get("sensy", False)) << 2
+                | int(self._cfg.get("sensz", False)) << 1
             )
             self.set_reg(
                 self.reg.SIG_CTRL.WINID,
@@ -1117,12 +1109,12 @@ class VibFn:
             )
 
         except (KeyError, HardwareError) as err:
-            print("** Failure writing basic configuration to device")
+            logger.error("** Failure writing basic configuration to device")
             raise DeviceConfigurationError from err
 
     def _get_sample(self, inter_delay=0.000001, verbose=False):
-        """Return single burst from device data
-        if malformed find next header byte and raise InvalidBurstReadError
+        """Return single burst from device if burst is malformed
+        then find next header byte and raise InvalidBurstReadError
 
         Parameters
         ----------
@@ -1144,16 +1136,16 @@ class VibFn:
             When header byte and delimiter byte is missing, find next header byte,
             and re-raise InvalidBurstReadError
         KeyboardInterrupt
-            When CTRL-C occurs and re-raise
+            When CTRL-C occurs, re-raise
         """
 
         # Return if struct is empty, then device is not configured
         if self._b_struct == "":
-            print("** Device not configured. Have you run set_config()?")
+            logger.error("** Device not configured. Have you run set_config()?")
             raise InvalidCommandError
         # Return if still in CONFIG mode
         if self._status.get("is_config"):
-            print("** Device not in SAMPLING mode. Run goto('sampling') first.")
+            logger.error("** Device not in SAMPLING mode. Run goto('sampling') first.")
             raise InvalidCommandError
         # Get data structure of the burst
         data_struct = struct.Struct(self._b_struct)
@@ -1171,11 +1163,10 @@ class VibFn:
             if (data_unpacked[0] != self.mdef.BURST_MARKER) or (
                 data_unpacked[-1] != self.mdef.DELIMITER
             ):
-                print("** Missing Header or Delimiter")
+                logger.warning("** Missing Header or Delimiter")
                 raise InvalidBurstReadError
 
             # Strip out the header and delimiter byte
-            # data_unpacked = data_unpacked[1:-1]
             return data_unpacked[1:-1]
         except InvalidBurstReadError:
             self.regif.port_io.find_delimiter(verbose=verbose)
@@ -1265,7 +1256,7 @@ class VibFn:
         return tuple(converted_burst)
 
     def _proc_sample(self, raw_burst=()):
-        """Process parameter as single burst read of device data
+        """Process as single burst read of device data
         Returns processed data in a tuple or () if empty burst
 
         Parameters
@@ -1281,9 +1272,9 @@ class VibFn:
         Raises
         -------
         InvalidBurstReadError
-            If raw_burst is None
+            If raw_burst is False
         KeyboardInterrupt
-            When CTRL-C occurs and re-raise
+            When CTRL-C occurs re-raise
         """
 
         try:
@@ -1291,18 +1282,19 @@ class VibFn:
                 raise InvalidBurstReadError
 
             # Get current burst fields setting
-            burst_fields = self._burst_fields
+            # burst_fields = self._burst_fields
 
             # Locally held scale factor
             sf_tempc = self.mdef.SF_TEMPC
+            tempc_offset = self.mdef.TEMPC_OFFSET
             sf_vel = self.mdef.SF_VEL
             sf_disp = self.mdef.SF_DISP
 
             # Map conversions for scaled
             map_scl = {
                 "ndflags": lambda x: x,
-                "tempc": lambda x: round((x * sf_tempc) + 34.987, 4),
-                "tempc8": lambda x: round((x * sf_tempc * 256) + 34.987, 4),
+                "tempc": lambda x: round((x * sf_tempc) + tempc_offset, 4),
+                "tempc8": lambda x: round((x * sf_tempc * 256) + tempc_offset, 4),
                 "velx": lambda x: round(x * sf_vel, 8),
                 "vely": lambda x: round(x * sf_vel, 8),
                 "velz": lambda x: round(x * sf_vel, 8),
@@ -1316,8 +1308,64 @@ class VibFn:
 
             return tuple(
                 map_scl[key.split("_")[0]](bdata)
-                for key, bdata in zip(burst_fields, raw_burst)
+                for key, bdata in zip(self._burst_fields, raw_burst)
             )
         except KeyboardInterrupt:
             print("CTRL-C: Exiting")
             raise
+
+    def _config_burst_ctrl(self, verbose=False):
+        """Configure BURST_CTRL
+
+        Parameters
+        ----------
+        verbose : bool
+            If True outputs additional debug info
+        """
+        verbose = self._cfg.get("verbose", False)
+
+        ndflags = self._cfg.get("ndflags", False)
+        tempc = self._cfg.get("tempc", False)
+        sensx = self._cfg.get("sensx", True)
+        sensy = self._cfg.get("sensy", True)
+        sensz = self._cfg.get("sensz", True)
+        counter = self._cfg.get("counter", "")
+        chksm = self._cfg.get("chksm", False)
+
+        self._status["ndflags"] = ndflags
+        self._status["tempc"] = tempc
+        self._status["sensx"] = sensx
+        self._status["sensy"] = sensy
+        self._status["sensz"] = sensz
+        self._status["counter"] = counter
+        self._status["chksm"] = chksm
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting BURST_CTRL register")
+            return
+
+        # BURST_CTRL HIGH
+        _wval = (
+            int(ndflags) << 7
+            | int(tempc) << 6
+            | 0 << 5  # reserved
+            | 0 << 4  # reserved
+            | 0 << 3  # reserved
+            | int(sensx) << 2
+            | int(sensy) << 1
+            | int(sensz) << 0
+        )
+        self.set_reg(
+            self.reg.BURST_CTRL.WINID,
+            self.reg.BURST_CTRL.ADDRH,
+            _wval,
+            verbose=verbose,
+        )
+        # BURST_CTRL LOW
+        _wval = int(bool(counter)) << 1 | int(chksm)
+        self.set_reg(
+            self.reg.BURST_CTRL.WINID,
+            self.reg.BURST_CTRL.ADDR,
+            _wval,
+            verbose=verbose,
+        )

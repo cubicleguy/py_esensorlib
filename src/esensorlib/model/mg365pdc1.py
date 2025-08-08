@@ -1,6 +1,6 @@
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -213,3 +213,38 @@ FLASH_BACKUP_DELAY_S = 0.200
 SELFTEST_DELAY_S = 0.080
 FILTER_SETTING_DELAY_S = 0.001
 ATTI_MOTION_SETTING_DELAY_S = 0.001
+
+# Device features
+HAS_FEATURE = {
+    "GYRO": True,
+    "ACCL": True,
+    "DLT_OUTPUT": True,
+    "ATTI_OUTPUT": True,
+    "ATTI_ON_REG": False,
+    "ROT_MATRIX": True,
+    "INITIAL_BACKUP": True,
+    "RANGE_OVER": True,
+    "RT_DIAG": False,
+    "A_RANGE": False,
+    "EXT_PIN": True,
+}
+
+# DOUT_RATE FILTER_SEL Default Map
+MAP_DOUT_FILTER = {
+    2000: "MV_AVG0",
+    1000: "MV_AVG2",
+    500: "MV_AVG4",
+    400: "MV_AVG8",
+    250: "MV_AVG8",
+    200: "MV_AVG16",
+    125: "MV_AVG16",
+    100: "MV_AVG32",
+    80: "MV_AVG32",
+    62.5: "MV_AVG32",
+    50: "MV_AVG64",
+    40: "MV_AVG64",
+    31.25: "MV_AVG64",
+    25: "MV_AVG128",
+    20: "MV_AVG128",
+    15.625: "MV_AVG128",
+}

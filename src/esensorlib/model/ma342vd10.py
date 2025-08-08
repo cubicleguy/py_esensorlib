@@ -1,6 +1,6 @@
 # MIT License
 
-# Copyright (c) 2024 Seiko Epson Corporation
+# Copyright (c) 2024, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -109,9 +109,10 @@ BAUD_RATE = {
 }
 
 # scale factor and conversion constants
-SF_VEL = 2.38e-4  # mm/s/bit
-SF_DISP = 2.38e-4  # mm/bit
+SF_VEL = (2**-22) * 1000  # mm/s/bit
+SF_DISP = (2**-22) * 1000  # mm/bit
 SF_TEMPC = -0.0037918  # degC/bit
+TEMPC_OFFSET = 34.987  # degC
 
 # delays and other timing constants
 POWERON_DELAY_S = 0.900
@@ -125,3 +126,11 @@ OUTPUT_MODE_SETTING_DELAY_S = 0.118
 SAMPLING_START_DELAY_S = 0.005
 SAMPLING_STOP_DELAY_S = 0.001
 SLEEP_WAKE_DELAY_S = 0.016
+
+# Device features
+HAS_FEATURE = {
+    "ACCL": True,
+    "TILT_OUTPUT": False,
+    "INITIAL_BACKUP": True,
+    "EXT_PIN": True,
+}

@@ -51,18 +51,18 @@ This a general python library for evaluating the Epson Sensing System
 devices and building evaluation software in a Python 3.x environment using the UART interface.
 
 This package consists of two main parts:
-  * *SensorDevice()* main class is composed of 5 subclasses *UartPort*, *RegInterface*, and one of the following *AcclFn*, *ImuFn*, or *VibFn* depending on the type of device
+  * *SensorDevice* main class is a composition subclasses *UartPort*, *RegInterface*, and one of the following *AcclFn*, *ImuFn*, or *VibFn* depending on the type of device
     * Primary purpose is to communicate and control the sensing device
     * Provide low-level functions to read/write registers
     * Provide functions to perform self-tests, software reset, flash-related functions
     * Provide functions to configure the device, and enter CONFIG/SAMPLING mode
     * Provide functions to read a burst sample when in SAMPLING mode
     * Expose properties to read various statuses and device model information
-    * For more detailed information on using the *SensorDevice()* class refer to the README.md in the `src/esensorlib/` folder
+    * For more detailed information on using the *SensorDevice* class refer to the README.md in the `src/esensorlib/` folder
   * A example logger comes in 3 variants based on the sensing device types: *accl_logger.py*, *imu_logger.py*, *vibe_logger.py*
-    * It is intended as evaluation software and as a reference on how to use the *SensorDevice()* class to control and read sensor data
-    * It uses the *LoggerHelper()* class for parsing and formatting sensor device status and sensor data
-    * It is a command line driven application for configuring the device and logging the sensor output using arguments:
+    * This is intended as evaluation software and as a reference on how to use the *SensorDevice* class to control and read sensor data
+    * The *LoggerHelper* class is for parsing and formatting sensor device status and sensor data
+    * This is a command line driven application for configuring the device and/or logging the sensor output using arguments:
       * Serial port setting such as port name, baudrate
       * Time duration for collecting sensor data
       * Device configuration settings i.e. output rate, filter setting, model, etc
@@ -77,17 +77,18 @@ This package consists of two main parts:
 
 
 ## Requirements
-  * Python 3.7+
+  * Python 3.8+
   * Python packages (can be installed using [pypi](https://pypi.org)):
     * [serial](https://pypi.org/project/pyserial)
     * [tqdm](https://pypi.org/project/tqdm)
     * [tabulate](https://pypi.org/project/tabulate)
+    * [loguru](https://pypi.org/project/loguru)
   * Epson sensing device connected to the host UART interface i.e. WIN/PC, Linux/PC or any embedded Linux system with serial port
     * M-G320PDG0, M-G354PDH0, M-G364PDC0, M-G364PDCA
     * M-G365PDC1, M-G365PDF1, M-G370PDF1, M-G370PDS0
     * M-G330PDG0, M-G366PDG0, M-G370PDG0, M-G370PDT0
-    * M-G570PR20
-    * M-A352AD10, M-A342VD10
+    * M-G570PR20, M-G355QDG0
+    * M-A352AD10, M-A370AD10, M-A342VD10
   * Epson evaluation board
     * Epson USB evaluation board [M-G32EV041](https://global.epson.com/products_and_drivers/sensing_system/assets/pdf/m-g32ev041_e_rev201910.pdf)
   * Alternatively, a direct connection to host digital UART port (**NOTE:** 3.3V CMOS I/O signaling) using an adapter such as:
@@ -100,8 +101,8 @@ For WIN/PC Only:
 
   * Before running the logger using the Epson IMU USB evaluation board (or equivalent FTDI USB-UART bridge IC) on a WIN/PC host, please set the Window's BM Options -> Latency Timer to 1msec
   * This is especially necessary for sampling rates faster than 125sps
-  * By default the BM latency timer is set to 16ms, which may cause the serial handling on the PC to be sluggish and drop bytes during transmission
-  * Change the serial port BM latency timer to 1msec in Windows 10, go to:
+  * By default the *BM latency timer* is set to 16ms, which may cause the serial handling on the PC to be sluggish and drop bytes during transmission
+  * Change the serial port *BM latency timer* to 1msec in Windows 10, go to:
     * Control Panel -> Hardware and Sound -> Device Manager -> Ports (COM & LPT) -> USB Serial Port (COMx) -> Properties ->  Port Settings -> Advanced -> BM Options -> Latency Timer (msec) -> set to 1
 
 For all systems:
@@ -132,7 +133,7 @@ python3 -m pip install <path to file>/esensorlib-x.x.x-py3-none-any.whl
 
 # SensorDevice Class Usage
 --------------------------
-  * *SensorDevice()* is the main class in the *esensorlib* package to be used for communicating and controlling the Epson sensor device
+  * *SensorDevice* is the main class in the *esensorlib* package to be used for communicating and controlling the Epson sensor device
   * Provides low-level functions to read/write registers
   * Provides functions to perform selftests, software reset, etc.
   * Provides flash-related functions
@@ -143,14 +144,14 @@ python3 -m pip install <path to file>/esensorlib-x.x.x-py3-none-any.whl
 
 ## Importing Package
   * Assuming the *esensorlib* package has been properly installed (see [Installation](#Installation)), the package can be imported into the current python environment
-  * *SensorDevice()* class and other supporting classes are contained in the files in directory *src/esensorlib*
+  * *SensorDevice* class and other supporting classes are contained in the files in directory *src/esensorlib*
 
 ```
 from esensorlib import sensor_device
 ```
 
 ## Instantiating Class
- * After importing the package, instantiate the SensorDevice() class with parameters during initialization
+ * After importing the package, instantiate the *SensorDevice* class with parameters during initialization
  * Regardless of the device type (IMU, ACCL, VIBE) instantiation process is the same typically just specifying the `port`
 
 ### Initialization Parameters
@@ -161,6 +162,9 @@ port         | str          | Name of the port i.e. on WIN/PC `com3`, Linux `/de
 speed        | int          | UART baudrate (defaults to 460800) or SPI clock rate (not implemented yet)
 if_type      | str          | `uart` (default) or `spi` (not implemented yet)
 model        | str          | Set to `auto` (default) for auto-detect or specify to override with a specific model
+verbose      | bool         | `False` (default). Set to `True` to enable debug and low-level register messages
+no_init      | bool         | `False` (default). Intended for devices that are flashed with `AUTO_START` enabled. Set to `True` to bypass register accesses during device initialization
+
 
 ### IMU Instantiation Example
 ```
@@ -184,12 +188,12 @@ Detected: A342VD10
 ```
 
 ## General Device Configuration
-  * The instantiated *SensorDevice()* object is then configured by passing a series of keyword arguments or as an unpacked dict when calling the *set_config()* method
+  * The instantiated *SensorDevice* object is then configured by passing a series of keyword arguments or unpacked dict when calling the *set_config()* method
   * Each type of device have some common arguments and unique arguments specific to the device type
   * If no configuration parameters are passed when calling the *set_config()* method, defaults are used
 
 ### IMU Configuration
-  * The *set_config()* method for IMU configuration is sequenced into calling 3 internal methods:
+  * The *set_config()* method for IMU configuration internally calls 3 private methods:
     * basic settings - core settings for sensor output
     * delta angle / velocity settings - optional additional settings for delta angle / velocity output
     * attitude / quaternion settings - optional additional settings for attitude and/or quaternion output
@@ -212,7 +216,9 @@ auto_start      | False        | Disable AUTO_START function
 is_32bit        | True         | All sensor data is 32-bit resolution i.e. Gyro, Accl, Temperature, etc
 a_range         | False        | Set accelerometer output range to 8G (ignored for models that do not selectable range i.e. 16G)
 ext_trigger     | False        | Disable external trigger
-uart_auto       | True         | Enable UART_AUTO mode
+uart_auto       | False        | Disable UART_AUTO mode
+verbose         | False        | Disable displaying debug messages
+no_init         | False        | Disable NO_INIT mode operation (for devices configured with AUTO_START mode)
 
 **IMU Delta Angle / Velocity Defaults**
 
@@ -235,7 +241,7 @@ qtn             | False        | Quaternion output is disabled
 
 
 #### Basic Configuration
-  * Create a dict with desired basic settings and pass it as keyword parameters or as an unpacked dict when calling the *set_config()* method
+  * Create a dict with desired basic settings and pass it as keyword parameters or unpacked dict when calling the *set_config()* method
   * **NOTE:** Not all key, value parameter pairs need to be provided when passing to *set_config()*
 
 Below example performs basic configuration and reads back the devices status properties.
@@ -254,14 +260,12 @@ Below example performs basic configuration and reads back the devices status pro
 ... }
 >>> dev.set_config(**my_cfg)
 Configured basic
-Delta angle / velocity function disabled. Bypassing.
-Attitude or quaternion disabled. Bypassing.
 >>> dev.status
 mappingproxy({'dout_rate': 250, 'filter_sel': 'MV_AVG16', 'ndflags': True, 'tempc': True, 'counter': 'sample', 'chksm': False, 'auto_start': False, 'is_32bit': True, 'a_range': 0, 'ext_trigger': False, 'uart_auto': True, 'is_config': True, 'dlta': False, 'dltv': False, 'dlta_sf_range': 12, 'dltv_sf_range': 12, 'atti': False, 'atti_mode': 'euler', 'atti_conv': 0, 'atti_profile': 'modea', 'qtn': False, 'drdy_pol': True})
 ```
 
 #### Delta Angle / Velocity Configuration
-  * Create a dict which also includes delta angle/velocity settings and pass it as keyword parameters or as an unpacked dict when calling the *set_config()* method
+  * Create a dict which also includes delta angle/velocity settings and pass it as keyword parameters or unpacked dict when calling the *set_config()* method
   * **NOTE:** Not all IMU models support delta angle / velocity output
 
 Below example performs basic, delta angle / velocity configuration and reads back the devices status properties.
@@ -285,13 +289,12 @@ Below example performs basic, delta angle / velocity configuration and reads bac
 >>> dev.set_config(**my_cfg)
 Configured basic
 Configured delta angle / velocity
-Attitude or quaternion disabled. Bypassing.
 >>> dev.status
 mappingproxy({'dout_rate': 250, 'filter_sel': 'MV_AVG16', 'ndflags': True, 'tempc': True, 'counter': 'sample', 'chksm': False, 'auto_start': False, 'is_32bit': True, 'a_range': 0, 'ext_trigger': False, 'uart_auto': True, 'is_config': True, 'dlta': True, 'dltv': True, 'dlta_sf_range': 4, 'dltv_sf_range': 4, 'atti': False, 'atti_mode': 'euler', 'atti_conv': 0, 'atti_profile': 'modea', 'qtn': False, 'drdy_pol': True})
 ```
 
 #### Attitude / Quaternion Configuration
-  * Create a dict which also includes attitude / quaternion settings and pass it as keyword parameters or as an unpacked dict when calling the *set_config()* method
+  * Create a dict which also includes attitude / quaternion settings and pass it as keyword parameters or unpacked dict when calling the *set_config()* method
   * **NOTE:** Not all IMU models support attitude or quaternion output
 
 Below example performs basic and attitude / quaternion configuration and reads back the devices status properties.
@@ -307,7 +310,6 @@ Below example performs basic and attitude / quaternion configuration and reads b
 ...     "is_32bit": True,
 ...     "a_range": 0,
 ...     "uart_auto": True,
-...
 ...     "atti": True,
 ...     "mode": "euler",
 ...     "conv": 0,
@@ -316,7 +318,6 @@ Below example performs basic and attitude / quaternion configuration and reads b
 ... }
 >>> dev.set_config(**my_cfg)
 Configured basic
-Delta angle / velocity function disabled. Bypassing.
 Configured attitude / quaternion
 >>> dev.status
 mappingproxy({'dout_rate': 125, 'filter_sel': 'MV_AVG32', 'ndflags': True, 'tempc': True, 'counter': 'sample', 'chksm': False, 'auto_start': False, 'is_32bit': True, 'a_range': 0, 'ext_trigger': False, 'uart_auto': True, 'is_config': True, 'dlta': False, 'dltv': False, 'dlta_sf_range': 12, 'dltv_sf_range': 12, 'atti': True, 'atti_mode': None, 'atti_conv': 0, 'atti_profile': 'modea', 'qtn': True, 'drdy_pol': True})
@@ -325,6 +326,8 @@ mappingproxy({'dout_rate': 125, 'filter_sel': 'MV_AVG32', 'ndflags': True, 'temp
 ### ACCL Configuration
   * The ACCL configuration is executed when calling *set_config()*
   * If no parameters are passed to *set_config()*, then the following defaults are used
+  * Create a dict with desired settings and pass it as keyword parameters or unpacked dict when calling the *set_config()* method
+  * **NOTE:** Not all key, value parameter pairs need to be included when passing to *set_config()*
 
 **ACCL Defaults**
 
@@ -337,13 +340,12 @@ tempc           | False        | Do not include temperature sensor field
 counter         | False        | Do not include counter field
 chksm           | False        | Do not include 16-bit checksum field
 auto_start      | False        | Disable AUTO_START function
-ext_trigger     | False        | Disable external trigger
-uart_auto       | True         | Enable UART_AUTO mode
+ext_trigger     | "disabled"   | Disable external trigger
+uart_auto       | False        | Disable UART_AUTO mode
 drdy_pol        | True         | DRDY output signal is active HIGH
 tilt            | 0            | 3-bit enable are 000b for TILT X, Y, Z
-
-  * Create a dict with desired settings and pass it as keyword parameters or as an unpacked dict when calling the *set_config()* method
-  * **NOTE:** Not all key, value parameter pairs need to be included when passing to *set_config()*
+reduced_noise   | False        | Reduced noise floor condition is disabled
+temp_stabil     | True         | Bias stabilization against thermal shock is enabled
 
 Below example performs configuration and reads back the devices status properties.
 
@@ -360,12 +362,14 @@ Below example performs configuration and reads back the devices status propertie
 >>> dev.set_config(**my_cfg)
 Configured
 >>> dev.status
-mappingproxy({'dout_rate': 100, 'filter_sel': 'K512_FC16', 'ndflags': True, 'tempc': True, 'counter': True, 'chksm': False, 'auto_start': False, 'ext_trigger': False, 'uart_auto': True, 'drdy_pol': True, 'tilt': 0, 'is_config': True})
+mappingproxy({'dout_rate': 100, 'filter_sel': 'K512_FC16', 'ndflags': True, 'tempc': True, 'counter': True, 'chksm': False, 'auto_start': False, 'ext_trigger': 'DISABLED', 'uart_auto': True, 'drdy_pol': True, 'tilt': 0, 'reduced_noise': False, 'temp_stabil': True, 'is_config': True})
 ```
 
 ### VIBE Configuration
   * The VIBE configuration is executed when calling *set_config()*
   * If no parameters are passed to *set_config()*, then the following defaults are used
+  * Create a dict with desired settings and pass it as keyword parameters or unpacked dict when calling the *set_config()* method
+  * **NOTE:** Not all key, value parameter pairs need to be included when passing to *set_config()*
 
 **VIBE Defaults**
 
@@ -383,11 +387,8 @@ counter           | False        | Do not include counter field
 chksm             | False        | Do not include 16-bit checksum field
 is_tempc16        | True         | Temperature sensor data is 16-bit
 auto_start        | False        | Disable AUTO_START function
-uart_auto         | True         | Enable UART_AUTO mode
+uart_auto         | False        | Disable UART_AUTO mode
 ext_pol           | False        | EXT input signal is active HIGH
-
- * Create a dict with desired settings and pass it as keyword parameters or as an unpacked dict when calling the *set_config()* method
- * **NOTE:** Not all key, value parameter pairs need to be included when passing to *set_config()*
 
 Below example performs basic configuration and reads back the devices status properties.
 
@@ -409,18 +410,18 @@ mappingproxy({'output_sel': 'DISP_PP', 'dout_rate_rmspp': 1, 'update_rate_rmspp'
 ```
 
 ## Entering Sampling Mode or Config Mode
-  * By default, the sensor device should start in CONFIG mode to allow *set_config()* method to program registers
-  * After the device has been configured, it can be put into SAMPLING mode to allow read back of sensor data
-  * Call the method `goto('sampling')` to place the device in SAMPLING mode (from CONFIG mode)
-  * **NOTE:** When the device is in SAMPLING mode with *UART_AUTO* enabled, the user can only read device sensor data, go to CONFIG mode, or issue a software reset
-  * Call the method `goto('config')` to place the device in CONFIG mode (from SAMPLING mode)
+  * By default, the sensor device should start in *CONFIG* mode to allow *set_config()* method to program registers
+  * After the device has been configured, it can be put into *SAMPLING* mode to allow read back of sensor data
+  * Call the method `goto('sampling')` to place the device in *SAMPLING* mode (from *CONFIG* mode)
+  * **NOTE:** When the device is in *SAMPLING* mode with *UART_AUTO* enabled, the user can only read device sensor data, go to *CONFIG* mode, or issue a software reset
+  * Call the method `goto('config')` to place the device in *CONFIG* mode (exit *SAMPLING* mode)
 
 
 ## Reading Sensor Data
-  * When the device is in SAMPLING mode, calling *read_sample()* will return a tuple containing scaled sensor values
-  * When the device is in SAMPLING mode, calling *read_sample_unscaled()* will return a tuple containing unscaled sensor values
+  * When the device is in *SAMPLING* mode, calling *read_sample()* will return a tuple containing scaled sensor values
+  * When the device is in *SAMPLING* mode, calling *read_sample_unscaled()* will return a tuple containing unscaled sensor values
   * The type of fields returned in the sensor data depends on the configuration of the device by *set_config()*
-  * To check the burst field names and data ordering of the sensor data, read the *burst_fields* property of the *SensorDevice()*
+  * To check the burst field names and ordering of the sensor data, read the *burst_fields* property of the *SensorDevice*
 
 ```
 >>> from esensorlib import sensor_device
@@ -428,8 +429,6 @@ mappingproxy({'output_sel': 'DISP_PP', 'dout_rate_rmspp': 1, 'update_rate_rmspp'
 Detected: G366PDG0
 >>> imu.set_config()
 Configured basic
-Delta angle / velocity disabled. Bypassing.
-Attitude or quaternion disabled. Bypassing.
 >>> imu.goto('sampling')
 >>> imu.read_sample()
 (0.96928175, -0.32923658, -0.1102651, 11.83782196, -78.78177643, 1006.86695099)
@@ -440,17 +439,17 @@ Attitude or quaternion disabled. Bypassing.
 ```
 
 ## SensorDevice Class Public Properties and Methods
-  * *SensorDevice()* class is the primary class intended for the user to instantiate and use
-  * Other classes are used internally for composing the *SensorDevice()* and is not intended to be instantiated directly by the user
+  * *SensorDevice* class is the primary class intended for the user to instantiate and interact with
+  * Other classes are used internally for composing the *SensorDevice* and is not intended to be instantiated directly by the user
 
 ### Public Properties
 
 Key          | Type         | Description / Comment
 -------------|--------------|-----------------------
-info         | mappingproxy | Device info such as port, if_type, model
+info         | mappingproxy | Device info such as port_io, if_type, model, port_io_info, prod_id, version_id, serial_id
 status       | mappingproxy | Device configuration status depending on device type. Refer to Status Attribute for each device type below
 burst_out    | mappingproxy | Burst output settings such as ndflags, tempc, gyro, accl, dlta, dltv, qtn, atti, gpio, counter, chksm depending on device type
-burst_field  | tuple        | Fields contained in sensor burst read
+burst_field  | tuple        | Fields contained when returning sensor burst read using *read_sample* or *read_sample_unscaled*
 mdef         | object       | Object containing device specific definitions, register addresses, and constants
 
 ### Settings in Status Property for IMU
@@ -478,7 +477,6 @@ atti_mode     | str          | If attitude enabled, indicates "euler" or "incl" 
 atti_conv     | int          | Indicates attitude axis conversion for ANG1, ANG2, ANG3 for IMUs that support it
 atti_profile  | str          | Indicates attitude motion profile "modea", "modeb", or "modec" for IMUs that support it
 qtn           | bool         | True=quaternion fields q0, q1, q2, q3, q4 are enabled in burst for IMUs that support it
-verbose       | bool         | True=debug messages display
 
 ### Settings in Status Property for ACCL
 
@@ -491,12 +489,13 @@ tempc         | bool         | True=temperature data enabled in burst
 counter       | bool         | True=counter field is enabled in burst
 chksm         | bool         | True=16-bit checksum enabled in burst
 auto_start    | bool         | True=AUTO_START is enabled
-ext_trigger   | bool         | True=external trigger is enabled
+ext_trigger   | str          | "DISABLED" (default), "EXT_TRIG_POS", "EXT_TRIG_NEG", "1PPS_POS", "1PPS_NEG"
 uart_auto     | bool         | True=UART_AUTO mode is enabled (recommended)
 drdy_pol      | bool         | True=DRDY output pin is active HIGH
 tilt          | int          | 3-bit enable to designate X, Y, Z axis to output tilt instead of acceleration
+reduced_noise | bool         | True=reduced noise floor is enabled
+temp_stabil   | bool         | True=bias stabilization against thermal shock is enabled
 is_config     | bool         | True=device is in CONFIG mode
-verbose       | bool         | True=debug messages displayed during program operation
 
 ### Settings in Status Property for VIBE
 
@@ -517,7 +516,6 @@ auto_start        | bool         | True=AUTO_START is enabled
 uart_auto         | bool         | True=UART_AUTO mode is enabled (recommended)
 ext_pol           | bool         | True=EXT input pin is active LOW
 is_config         | bool         | True=device is in CONFIG mode
-verbose           | bool         | True=debug messages displayed during program operation
 
 ### Public Methods
 
@@ -526,7 +524,7 @@ Method                                | Description / Comment
 get_reg(winnum, regaddr)              | Perform 16-bit read from specified WIN_ID and register address
 set_reg(winnum, regaddr, write_byte)  | Perform 8-bit write to WIN_ID and register address with specified byte
 get_regdump(columns)                  | Print out all registers (specify number of columns to format to)
-set_config(key=value,...)             | Configure device settings with key, value arguments
+set_config(key=value,...)             | Configure device settings with key, value arguments or unpacked dict
 init_check()                          | Read status for hardware error (HARD_ERR)
 do_selftest()                         | Perform selftest and check for errors (ST_ERR)
 do_softreset()                        | Perform software reset
@@ -535,16 +533,18 @@ backup_flash()                        | Backup current register settings to flas
 init_backup()                         | Clear flash setting to factory defaults
 goto(mode, post_delay)                | Put device in CONFIG or SAMPLING mode and delay for specified time(post_delay) in seconds
 get_mode()                            | Read current mode status (CONFIG or SAMPLING)
-read_sample()                         | Read a set of burst data from device with scale factor applied
-read_sample_unscaled()                | Read a set of burst data from device without scale factor applied
+read_sample()                         | Read a tuple of burst data from device with scale factor applied
+read_sample_unscaled()                | Read a tuple of burst data from device without scale factor applied
+get_model_definitions()               | Return imported model definitions object (intended for use only during *SensorDevice* instantiation)
+get_sensor_fn()                       | Return imu_fn, accl_fn, or vibe_fn object (intended for use only during *SensorDevice* instantiation)
 
 # LoggerHelper Class Library Usage
 -----------------------------------
   * This *LoggerHelper()* class is used by the *xxxx_logger.py* to handle formatting of the sensor data for output to console or csv file
-  * NOTE: *LoggerHelper()* is instantiated and initialized by passing in a configured *SensorDevice()* object as a parameter
+  * NOTE: *LoggerHelper()* is instantiated and initialized by passing in a configured *SensorDevice* object as a parameter
 
 ## Importing Helper
-  * NOTE: Before using *LoggerHelper()* class library, a *SensorDevice()* should be instantiated from the *esensorlib* package and configured
+  * NOTE: Before using *LoggerHelper()* class library, a *SensorDevice* should be instantiated from the *esensorlib* package and configured by *set_config()*
   * *LoggerHelper()* class is located in the *helper.py* file in the *example* subdirectory where the *esensorlib* package is installed in your system (i.e. <python>\Lib\site-packages\esensorlib\example)
 
 ```
@@ -552,7 +552,7 @@ from esensorlib.example import helper
 ```
 
 ## Instantiating Helper
-  * After importing the *helper.py*, instantiate a LoggerHelper class while passing the *SensorDevice()* instance
+  * After importing the *helper.py*, instantiate a LoggerHelper class while passing the *SensorDevice* instance
 
 ```
 >>> from esensorlib import sensor_device
@@ -560,25 +560,21 @@ from esensorlib.example import helper
 Detected: G366PDG0
 >>> dev.set_config()
 Configured basic
-Delta angle / velocity disabled. Bypassing.
-Attitude or quaternion disabled. Bypassing.
 >>> from esensorlib.example import helper
 >>> log = helper.LoggerHelper(sensor=dev)
 ```
 
 ## Setting Output to CSV File
-  * By default, *LoggerHelper()* class methods *write()*, *write_header()*, *write_footer()* will send output to the console
-  * To redirect to a CSV file instead of the console, call the *LoggerHelper()* *set_writer()* method specifying the *to* parameter
+  * By default, *LoggerHelper()* methods *write()*, *write_header()*, *write_footer()* will send output to the console
+  * To redirect to a CSV file instead of the console, call the *set_writer()* method specifying the *to* parameter
   * In the *to* parameter pass a list of strings which will combined with "_" to create a filename appended with *.csv*
-  * The *set_writer* method will also append device info and settings from *SensorDevice()* when creating the filename
+  * The *set_writer* method will also append device info and settings from *SensorDevice* when creating the filename
 ```
 >>> from esensorlib import sensor_device
 >>> dev = sensor_device.SensorDevice('com7')
 Detected: G366PDG0
 >>> dev.set_config()
 Configured basic
-Delta angle / velocity disabled. Bypassing.
-Attitude or quaternion disabled. Bypassing.
 >>> from esensorlib.example import helper
 >>> log = helper.LoggerHelper(sensor=dev)
 >>> log.set_writer(to=['my_csv'])
@@ -592,15 +588,13 @@ CSV closed
 
 ## Writing Header
   * To write header rows containing device & configuration information to the csv file or console call the *write_header()* method
-  * **NOTE:** The *SensorDevice()* should be properly configured by *set_config()* method before calling the *write_header()* method
+  * **NOTE:** The *SensorDevice* should be properly configured by *set_config()* method before calling the *write_header()* method
 ```
 >>> from esensorlib import sensor_device
 >>> dev = sensor_device.SensorDevice('com7')
 Detected: G366PDG0
 >>> dev.set_config()
 Configured basic
-Delta angle / velocity disabled. Bypassing.
-Attitude or quaternion disabled. Bypassing.
 >>> from esensorlib.example import helper
 >>> log = helper.LoggerHelper(sensor=dev)
 >>> log.write_header()
@@ -613,17 +607,15 @@ Sample No.,Flags[hex],Ts[deg.C],Gx[dps],Gy[dps],Gz[dps],Ax[mG],Ay[mG],Az[mG],Cou
 ```
 
 ## Writing Sample Data
-  * To write a burst of sensor samples to the console or csv file call the *write()* method using the return values from the *SensorDevice()* *read_sample()* method
+  * To write a burst of sensor samples to the console or csv file call the *write()* method using the return values from the *SensorDevice* *read_sample()* method
   * **NOTE:** The device must be in SAMPLING mode before calling the *read_sample()* method
-  * **NOTE:** The *SensorDevice()* should be be properly configured by *set_config()* method before calling the *read_sample()* method
+  * **NOTE:** The *SensorDevice* should be be properly configured by *set_config()* method before calling the *read_sample()* method
 ```
 >>> from esensorlib import sensor_device
 >>> dev = sensor_device.SensorDevice('com7')
 Detected: G366PDG0
 >>> dev.set_config()
 Configured basic
-Delta angle / velocity disabled. Bypassing.
-Attitude or quaternion disabled. Bypassing.
 >>> dev.goto('sampling')
 >>> from esensorlib.example import helper
 >>> log = helper.LoggerHelper(sensor=dev)
@@ -631,15 +623,13 @@ Attitude or quaternion disabled. Bypassing.
 >>>
 ```
 
-  * To write 1000 bursts of sensor samples to the csv file call the *write()* method with the return values from the *SensorDevice()* *read_sample()* method
+  * To write 1000 bursts of sensor samples to the csv file call the *write()* method with the return values from the *SensorDevice* *read_sample()* method
 ```
 >>> from esensorlib import sensor_device
 >>> dev = sensor_device.SensorDevice('com7')
 Detected: G366PDG0
 >>> dev.set_config()
 Configured basic
-Delta angle / velocity disabled. Bypassing.
-Attitude or quaternion disabled. Bypassing.
 >>> dev.goto('sampling')
 >>> from esensorlib.example import helper
 >>> log = helper.LoggerHelper(sensor=dev)
@@ -650,7 +640,7 @@ Attitude or quaternion disabled. Bypassing.
 
 ## Writing Footer
   * To write footer (device and configuration status) rows to the csv file or console call the *write_footer()* method
-  * **NOTE:** The *SensorDevice()* should be be properly configured by *set_config()* method before calling the *write_footer()* method
+  * **NOTE:** The *SensorDevice* should be be properly configured by *set_config()* method before calling the *write_footer()* method
 ```
 >>> log.write_footer()
 #Log End,2023-02-23 17:09:06.114034,,,,,,,,
@@ -660,7 +650,7 @@ Attitude or quaternion disabled. Bypassing.
 
 ## Printing Device Status
   * To print to console current date/time and device, and configuration info call the *get_dev_info()* method
-  * **NOTE:** The *SensorDevice()* should be be properly configured by *set_config()* method before calling the *get_dev_info()* method
+  * **NOTE:** The *SensorDevice* should be be properly configured by *set_config()* method before calling the *get_dev_info()* method
 ```
 >>>log.get_dev_info()
 -----------------  -----------------  ----------------  ------------
@@ -676,15 +666,15 @@ DLT: False         ATTI: False        QTN: False        BIT32: True
 ## Helper Public Methods and Properties
 
 ### Helper Public Properties
-  * These properties are mirrors of the *SensorDevice()* properties propagated to the *LoggerHelper()* class
+  * These properties are mirrors of the *SensorDevice* properties propagated to the *LoggerHelper()* class
 
 Attribute       | Type         | Description / Comment
 ----------------|--------------|-----------------------
 dev_info        | mappingproxy | Device info such as prod_id, version_id, serial_id, comport, model
-dev_status      | mappingproxy | Device configuration status *SensorDevice()* *status*
-dev_burst_out   | mappingproxy | Burst output status of *SensorDevice()* *burst_out* properties
-dev_burst_fields| tuple        | Ordered list of burst field names for a burst read *SensorDevice()* *read_sample()*
-dev_mdef        | object       | Object that stores the current model's specific definitions and constants of *SensorDevice()* *mdef*
+dev_status      | mappingproxy | Device configuration status *SensorDevice* *status* properties
+dev_burst_out   | mappingproxy | Burst output status of *SensorDevice* *burst_out* properties
+dev_burst_fields| tuple        | Ordered list of burst field names for a burst read *SensorDevice* *read_sample()*
+dev_mdef        | object       | Object that stores the current model's specific definitions and constants of *SensorDevice* *mdef*
 
 ### Helper Public Method
 

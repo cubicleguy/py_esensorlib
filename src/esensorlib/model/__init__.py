@@ -23,6 +23,7 @@ IMU
 ---
 mg320
 mg354
+mg355qdg0
 mg364pdc0
 mg364pdca
 mg365pdc1
@@ -37,6 +38,7 @@ mg570pr20
 ACCL
 ----
 ma352ad10
+ma370ad10
 
 VIBE
 ---

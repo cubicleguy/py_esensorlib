@@ -1,6 +1,6 @@
 # MIT License
 
-# Copyright (c) 2024 Seiko Epson Corporation
+# Copyright (c) 2024, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -100,8 +100,8 @@ MODE_CMD = {
 
 EXT_SEL = {
     "DISABLED": 0x00,
-    "TRIG_POS_EDGE": 0x10,
-    "TRIG_NEG_EDGE": 0x11,
+    "EXT_TRIG_POS": 0x02,
+    "EXT_TRIG_NEG": 0x03,
 }
 
 DOUT_RATE = {
@@ -137,9 +137,10 @@ BAUD_RATE = {
 
 
 # scale factor and conversion constants
-SF_ACCL = 0.06e-3  # mg/bit
+SF_ACCL = (1 / (2**24)) * 1e3  # mG/bit
 SF_TEMPC = -0.0037918  # degC/bit
-SF_TILT = 0.002e-6  # rad/bit
+TEMPC_OFFSET = 34.987  # degC
+SF_TILT = 1 / (2**29)  # rad/bit
 
 # delays and other timing constants
 POWERON_DELAY_S = 0.900
@@ -151,3 +152,13 @@ SELFTEST_SENSAXIS_DELAY_S = 40  # Sensitivity/axis
 SELFTEST_FLASH_DELAY_S = 0.005
 FILTER_SETTING_DELAY_S = 0.100  # UDF max
 SLEEP_WAKE_DELAY_S = 0.016
+
+# Device features
+HAS_FEATURE = {
+    "ACCL": True,
+    "TILT_OUTPUT": True,
+    "INITIAL_BACKUP": True,
+    "EXT_PIN": True,
+    "REDUCED_NOISE": True,
+    "TEMP_STBIL": True,
+}

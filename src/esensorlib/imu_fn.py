@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -31,6 +31,8 @@ Contains:
 import struct
 import time
 from types import MappingProxyType
+
+from loguru import logger
 
 
 # Custom Exceptions
@@ -64,7 +66,7 @@ class InvalidBurstReadError(Exception):
 
 class ImuFn:
     """
-    IMU level functions
+    IMU functions
 
     ...
 
@@ -85,7 +87,7 @@ class ImuFn:
 
     Methods
     -------
-    get_reg(winnum, regaddr, verbose=False)
+    get_reg(winnum, regaddr, verbose)
         16-bit read from specified WIN_ID and register address
 
     set_reg(winnum, regaddr, write_byte, verbose=False)
@@ -94,38 +96,38 @@ class ImuFn:
     set_config(**cfg)
         Configure device from key, value parameters
 
-    set_baudrate(baud, verbose=False)
+    set_baudrate(baud, verbose)
         Configure device baudrate setting NOTE: This takes immediate effect.
 
-    init_check(verbose=False)
+    init_check(verbose)
         Check if HARD_ERR (hardware error) is reported
         Usually performed once after startup
 
-    do_selftest(verbose=False)
+    do_selftest(verbose)
         Perform self-test and check if ST_ERR (self-test error) is reported
 
-    do_softreset(verbose=False)
+    do_softreset(verbose)
         Perform software reset
 
-    do_flashtest(verbose=False)
+    do_flashtest(verbose)
         Perform self-test on flash and return result
 
-    backup_flash(verbose=False)
+    backup_flash(verbose)
         Perform flash backup of registers and return result
 
-    init_backup(verbose=False)
+    init_backup(verbose)
         Restore flash to factory default and return result
 
-    goto(mode, post_delay, verbose=False)
+    goto(mode, post_delay, verbose)
         Set device to CONFIG or SAMPLING mode
 
-    get_mode(verbose=False)
+    get_mode(verbose)
         Return device mode status as either CONFIG or SAMPLING
 
-    read_sample()
+    read_sample(verbose)
         Return scaled burst sample of sensor data
 
-    read_sample_unscaled()
+    read_sample_unscaled(verbose)
         Return unscaled burst sample of sensor data
     """
 
@@ -138,7 +140,7 @@ class ImuFn:
         obj_mdef : module
             Model definitions passed from SensorDevice() instance
         device_info : dict
-            prod_id, version_id, serial_id as key, values pairs
+            prod_id, version_id, serial_id as key, value pairs
         verbose : bool
             If True outputs additional debug info
         """
@@ -151,7 +153,11 @@ class ImuFn:
             "version_id": None,
             "serial_id": None,
         }
+
         self._verbose = verbose
+
+        # _cfg is updated when set_config(**cfg) called
+        self._cfg = {}
 
         # Default device config status
         self._status = {
@@ -212,7 +218,7 @@ class ImuFn:
             [
                 f"{cls}(obj_regif={repr(self.regif)}, ",
                 f"obj_mdef={repr(self.model_def)}, ",
-                f"device_info=({self._device_info}), ",
+                f"device_info={self._device_info}, ",
                 f"verbose={self._verbose})",
             ]
         )
@@ -270,52 +276,34 @@ class ImuFn:
 
     def set_config(self, **cfg):
         """Configure device based on keyword, value parameters.
-        Configure with supplied key, values,
-        Then read burst configuration from BURST_CTRL1, BURST_CTRL2
+        Configure with supplied key, values
+        Then read burst configuration from BURST_CTRL
         and update status dict
 
         Parameters
         ----------
-        "dout_rate": int,
-        "filter_sel": str,
-        "ndflags": bool,
-        "tempc": bool,
-        "counter": str,
-        "chksm": bool,
-        "auto_start": bool,
-        "is_32bit": bool,
-        "a_range": bool,
-        "ext_trigger": bool,
-        "uart_auto": bool
-
-        "dlta": bool,
-        "dltv": bool,
-        "dlta_sf_range": int,
-        "dltv_sf_range": int,
-
-        "atti": bool,
-        "mode": str, "euler" or "incl"
-        "conv": int, 0 to 23
-        "profile": "modea", "modeb", "modec"
-        "qtn": bool,
-        "verbose" : bool, If True outputs additional debug info
-
+        cfg : dict of keyword arguments
+            Optional keyword arguments
         """
 
-        is_dict = isinstance(cfg, dict)
-        is_none = cfg is None
-        if not (is_dict or is_none):
-            raise TypeError(f"** cfg parameters must be **kwargs or None: {cfg}")
+        if not cfg:
+            logger.warning("** No cfg parameters provided using defaults")
 
-        verbose = cfg.get("verbose", False)
-        self.goto("config", verbose=verbose)
-        self._config_basic(**cfg)
-        self._config_dlt(**cfg)
-        self._config_atti(**cfg)
+        self._cfg = cfg
 
-        self._get_burst_config(verbose=verbose)
+        verbose = self._cfg.get("verbose", False)
         if verbose:
-            print(f"Status: {self._status}")
+            logger.debug(f"set_config({cfg})")
+
+        # Place device in CONFIG mode, if not already
+        self.goto("config", verbose=verbose)
+        self._config_basic(verbose)
+        self._config_dlt(verbose)
+        self._config_atti(verbose)
+        self._get_burst_config(verbose)
+
+        if verbose:
+            logger.debug(f"imu_fn.status: {self.status}")
 
     def set_baudrate(self, baud, verbose=False):
         """Configure Baud Rate
@@ -331,6 +319,8 @@ class ImuFn:
         verbose : bool
             If True outputs additional debug info
         """
+        if verbose:
+            logger.debug(f"Set Baud Rate = {baud}")
 
         try:
             writebyte = self.mdef.BAUD_RATE[baud]
@@ -340,10 +330,8 @@ class ImuFn:
                 writebyte,
                 verbose,
             )
-            if verbose:
-                print(f"Set Baud Rate = {baud}")
         except KeyError as err:
-            print(f"** Invalid BAUD_RATE: {baud}")
+            logger.error(f"** Invalid BAUD_RATE: {baud}")
             raise InvalidCommandError from err
 
     def init_check(self, verbose=False):
@@ -366,13 +354,11 @@ class ImuFn:
             result = self.get_reg(
                 self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR, verbose
             )
-            if verbose:
-                print(".", end="")
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
         )
         if verbose:
-            print("IMU Startup Check")
+            logger.debug("IMU Startup Check")
         result = result & 0x0060
         if result:
             raise HardwareError("** Hardware Failure. HARD_ERR bits")
@@ -397,14 +383,12 @@ class ImuFn:
         while (result & 0x0400) != 0:
             # Wait for SELF_TEST = 0
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
         )
         result = result & 0x7800
         if result:
-            raise SelfTestError("** Self Test Failure. ST_ERR bits")
+            raise SelfTestError(f"** Self Test Failure. DIAG_STAT={result: 04X}")
         print("Self Test completed with no errors")
 
     def do_softreset(self, verbose=False):
@@ -439,8 +423,6 @@ class ImuFn:
         result = 0x0800
         while (result & 0x0800) != 0:
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
@@ -469,8 +451,6 @@ class ImuFn:
         result = 0x0008
         while (result & 0x0008) != 0:
             result = self.get_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
@@ -487,22 +467,38 @@ class ImuFn:
         ----------
         verbose : bool
             If True outputs additional debug info
+
+        Raises
+        -------
+        FlashBackupError
+            non-zero results indicates FLASH_BU_ERR
         """
+
+        if not self.mdef.HAS_FEATURE.get("INITIAL_BACKUP"):
+            logger.warning("Initial backup function not supported. Bypassing...")
+            return
 
         self.set_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR, 0x10, verbose)
         time.sleep(self.mdef.FLASH_BACKUP_DELAY_S)
         result = 0x0010
         while (result & 0x0010) != 0:
             result = self.get_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR)
-            if verbose:
-                print(".", end="")
+
+        result = self.get_reg(
+            self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
+        )
+        result = result & 0x0001
+        if result:
+            raise FlashBackupError("** Initial Backup Failure. FLASH_BU_ERR bit")
         print("Initial Backup Completed")
 
-    def goto(self, mode, post_delay=0.5, verbose=False):
+    def goto(self, mode="config", post_delay=0.5, verbose=False):
         """Set MODE_CMD to either CONFIG or SAMPLING mode.
         If entering SAMPLING, store the state of burst configuration
+        update _status
+        if no_init, avoid register accesses
         NOTE: Device must be in SAMPLING mode to call read_sample()
-        NOTE: Device must be in CONFIG mode for most functions
+        NOTE: Device must be in CONFIG mode for most configuration functions
 
         Parameters
         ----------
@@ -518,16 +514,26 @@ class ImuFn:
         InvalidCommandError
             Raises to caller when mode is not valid string
         """
+
         if not isinstance(mode, str):
             raise TypeError(f"** Mode parameter must be 'config' or 'sampling': {mode}")
 
         mode = mode.upper()
+        self._status["is_config"] = mode == "CONFIG"
+
+        if verbose:
+            logger.debug(f"MODE_CMD = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning(
+                "--no_init option specified, bypass setting in MODE_CTRL register"
+            )
+            return
+
         try:
-            # When entering SAMPLING mode, update the
-            # self._burst_out & self._status from
-            # _get_burst_config()
+            # When entering SAMPLING mode, get burst read configuration
             if mode == "SAMPLING":
-                self._get_burst_config(verbose=verbose)
+                self._get_burst_config(verbose)
 
             self.set_reg(
                 self.reg.MODE_CTRL.WINID,
@@ -536,15 +542,13 @@ class ImuFn:
                 verbose=verbose,
             )
             time.sleep(post_delay)
-            # After entering CONFIG mode
+            # When entering CONFIG mode
             # flush any pending incoming burst data
             if mode == "CONFIG":
                 self.regif.port_io.reset_input_buffer()
-            if verbose:
-                print(f"MODE_CMD = {mode}")
-            self._status["is_config"] = mode == "CONFIG"
+
         except KeyError as err:
-            print("** Invalid MODE_CMD")
+            logger.error("** Invalid MODE_CMD")
             raise InvalidCommandError from err
 
     def get_mode(self, verbose=False):
@@ -574,12 +578,12 @@ class ImuFn:
         ) >> 10
         self._status["is_config"] = bool(result)
         if verbose:
-            print(f"MODE_CMD = {result}")
+            logger.debug(f"MODE_CMD = {result}")
         return result
 
     def read_sample(self, verbose=False):
         """Read one burst of sensor data, post processes,
-        and returns scaled sensor data scaled.
+        and returns scaled sensor data.
         If burst read contains corrupted data, returns ()
         NOTE: Device must be in SAMPLING mode before calling
 
@@ -591,9 +595,9 @@ class ImuFn:
         Returns
         -------
         tuple
-            tuple containing single set of sensor burst data with or
-            without scale factor applied
-            () if burst data is malformed or device not in SAMPLING
+            tuple containing single set of sensor burst data with
+            scale factor applied or () if burst data is malformed
+            or device not in SAMPLING
 
         Raises
         -------
@@ -614,7 +618,7 @@ class ImuFn:
             print("Stop reading sensor")
             raise
         except IOError:
-            print("** Failure reading sensor sample")
+            logger.error("** Failure reading sensor sample")
             raise
 
     def read_sample_unscaled(self, verbose=False):
@@ -631,9 +635,9 @@ class ImuFn:
         Returns
         -------
         tuple
-            tuple containing single set of sensor burst data with or
-            without scale factor applied
-            () if burst data is malformed or device not in SAMPLING
+            tuple containing single set of sensor burst data
+            without scale factor applied or () if burst data
+            is malformed or device not in SAMPLING
 
         Raises
         -------
@@ -654,12 +658,13 @@ class ImuFn:
             print("Stop reading sensor")
             raise
         except IOError:
-            print("** Failure reading sensor sample")
+            logger.error("** Failure reading sensor sample")
             raise
 
     def _get_burst_config(self, verbose=False):
-        """Read BURST_CTRL1 & BURST_CTRL2 to update in
-        _b_struct, _burst_out, _burst_fields
+        """Typically, read from either BURST_CTRL1 & BURST_CTRL2.
+        For no_init, read from self._cfg to update
+        _burst_out, _b_struct, _burst_fields
 
         Parameters
         ----------
@@ -667,44 +672,73 @@ class ImuFn:
             If True outputs additional debug info
         """
 
-        tmp1 = self.get_reg(
-            self.reg.BURST_CTRL1.WINID, self.reg.BURST_CTRL1.ADDR, verbose
-        )
-        tmp2 = self.get_reg(
-            self.reg.BURST_CTRL2.WINID, self.reg.BURST_CTRL2.ADDR, verbose
-        )
+        no_init = self._cfg.get("no_init", False)
 
-        self._burst_out["ndflags"] = bool(tmp1 & 0x8000)
-        self._burst_out["tempc"] = bool(tmp1 & 0x4000)
-        self._burst_out["gyro"] = bool(tmp1 & 0x2000)
-        self._burst_out["accl"] = bool(tmp1 & 0x1000)
-        self._burst_out["dlta"] = bool(tmp1 & 0x0800)
-        self._burst_out["dltv"] = bool(tmp1 & 0x0400)
-        self._burst_out["qtn"] = bool(tmp1 & 0x0200)
-        self._burst_out["atti"] = bool(tmp1 & 0x0100)
-        self._burst_out["gpio"] = bool(tmp1 & 0x0004)
-        self._burst_out["counter"] = bool(tmp1 & 0x0002)
-        self._burst_out["chksm"] = bool(tmp1 & 0x0001)
+        if not no_init:
+            tmp1 = self.get_reg(
+                self.reg.BURST_CTRL1.WINID, self.reg.BURST_CTRL1.ADDR, verbose
+            )
+            tmp2 = self.get_reg(
+                self.reg.BURST_CTRL2.WINID, self.reg.BURST_CTRL2.ADDR, verbose
+            )
 
-        self._burst_out["tempc32"] = bool(tmp2 & 0x4000)
-        self._burst_out["gyro32"] = bool(tmp2 & 0x2000)
-        self._burst_out["accl32"] = bool(tmp2 & 0x1000)
-        self._burst_out["dlta32"] = bool(tmp2 & 0x0800)
-        self._burst_out["dltv32"] = bool(tmp2 & 0x0400)
-        self._burst_out["qtn32"] = bool(tmp2 & 0x0200)
-        self._burst_out["atti32"] = bool(tmp2 & 0x0100)
+            self._burst_out["ndflags"] = bool(tmp1 & 0x8000)
+            self._burst_out["tempc"] = bool(tmp1 & 0x4000)
+            self._burst_out["gyro"] = bool(tmp1 & 0x2000)
+            self._burst_out["accl"] = bool(tmp1 & 0x1000)
+            self._burst_out["dlta"] = bool(tmp1 & 0x0800)
+            self._burst_out["dltv"] = bool(tmp1 & 0x0400)
+            self._burst_out["qtn"] = bool(tmp1 & 0x0200)
+            self._burst_out["atti"] = bool(tmp1 & 0x0100)
+            self._burst_out["gpio"] = bool(tmp1 & 0x0004)
+            self._burst_out["counter"] = bool(tmp1 & 0x0002)
+            self._burst_out["chksm"] = bool(tmp1 & 0x0001)
+
+            self._burst_out["tempc32"] = bool(tmp2 & 0x4000)
+            self._burst_out["gyro32"] = bool(tmp2 & 0x2000)
+            self._burst_out["accl32"] = bool(tmp2 & 0x1000)
+            self._burst_out["dlta32"] = bool(tmp2 & 0x0800)
+            self._burst_out["dltv32"] = bool(tmp2 & 0x0400)
+            self._burst_out["qtn32"] = bool(tmp2 & 0x0200)
+            self._burst_out["atti32"] = bool(tmp2 & 0x0100)
+        else:
+            logger.warning(
+                "--no_init option assumes device is already configured "
+                "with user-specified settings and AUTO_START "
+                "enabled."
+            )
+            self._burst_out["ndflags"] = self._cfg.get("ndflags", False)
+            self._burst_out["tempc"] = self._cfg.get("tempc", False)
+            self._burst_out["gyro"] = True
+            self._burst_out["accl"] = True
+            self._burst_out["dlta"] = self._cfg.get("dlta", False)
+            self._burst_out["dltv"] = self._cfg.get("dltv", False)
+            self._burst_out["qtn"] = self._cfg.get("qtn", False)
+            self._burst_out["atti"] = self._cfg.get("atti", False)
+            self._burst_out["gpio"] = self._cfg.get("gpio", False)
+            self._burst_out["counter"] = bool(self._cfg.get("counter", ""))
+            self._burst_out["chksm"] = self._cfg.get("chksm", False)
+
+            is_32bit = self._cfg.get("is_32bit")
+            self._burst_out["tempc32"] = is_32bit and self._cfg.get("tempc", False)
+            self._burst_out["gyro32"] = is_32bit
+            self._burst_out["accl32"] = is_32bit
+            self._burst_out["dlta32"] = is_32bit and self._cfg.get("dlta", False)
+            self._burst_out["dltv32"] = is_32bit and self._cfg.get("dltv", False)
+            self._burst_out["qtn32"] = is_32bit and self._cfg.get("qtn", False)
+            self._burst_out["atti32"] = is_32bit and self._cfg.get("atti", False)
 
         self._b_struct = self._get_burst_struct_fmt()
         self._burst_fields = self._get_burst_fields()
 
         if verbose:
-            print(f"_get_burst_struct_fmt(): {self._b_struct}")
-            print(f"_get_burst_fields(): {self._burst_fields}")
-            print(f"_get_burst_config(): {self._burst_out}")
+            logger.debug(f"burst_out: {self._burst_out}")
+            logger.debug(f"burst_struct_fmt: {self._b_struct}")
+            logger.debug(f"burst_fields: {self._burst_fields}")
 
     def _get_burst_struct_fmt(self):
         """Returns the struct format for burst packet
-        based on _burst_out (from BURST_CTRL1 & BURST_CTRL2)
+        based on _burst_out
 
         Returns
         -------
@@ -714,8 +748,7 @@ class ImuFn:
 
         # Build struct format based on decoded flags
         # of bytes from BURST_CTRL & SIG_CTRL
-        # > = Big endian
-        # B = unsigned char
+        # > = Big endian, B = unsigned char, b = signed char
         # i = int (4 byte), I = unsigned int (4 byte)
         # h = short (2byte), H = unsigned short (2 byte)
 
@@ -739,7 +772,7 @@ class ImuFn:
             "qtn32": "iiii",
             "atti32": "iii",
         }
-        # Start with header byte
+        # Header Byte
         struct_list = [">B"]
         for key in self._burst_out:
             # Loop thru _burst_out until it reaches tempc32
@@ -752,7 +785,7 @@ class ImuFn:
                     struct_list.append(_map_struct.get(f"{key}32"))
                 else:
                     struct_list.append(_map_struct.get(key))
-        # Append delimiter byte
+        # Delimiter Byte
         struct_list.append("B")
         return "".join(struct_list)
 
@@ -790,122 +823,75 @@ class ImuFn:
                     burst_fields.append(key)
         return tuple(burst_fields)
 
-    def _set_ndflags(self, burst_cfg, verbose=False):
-        """Configure SIG_CTRL based on burst config dict
-        NOTE: Not used when UART_AUTO is enabled
+    def _set_output_rate(self, output_rate=200, verbose=False):
+        """Configure DOUT_RATE and update _status, and
+        if no_init then do not write to registers
 
         Parameters
         ----------
-        burst_cfg : dict
-            parses burst flags from dict to enabled in SIG_CTRL
+        output_rate : int
+            Specify DOUT_RATE setting in sps
         verbose : bool
             If True outputs additional debug info
-        """
-        # If UART_AUTO then ignore setting SIG_CTRL and return
-        if self._status["uart_auto"]:
-            return
 
-        try:
-            # SIG_CTRL
-            _wval = (
-                int(burst_cfg["tempc"]) << 7
-                | int(burst_cfg["gyro"]) << 6
-                | int(burst_cfg["gyro"]) << 5
-                | int(burst_cfg["gyro"]) << 4
-                | int(burst_cfg["accl"]) << 3
-                | int(burst_cfg["accl"]) << 2
-                | int(burst_cfg["accl"]) << 1
-            )
-            self.set_reg(
-                self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDRH, _wval, verbose
-            )
-            _wval = (
-                int(burst_cfg["dlta"]) << 7
-                | int(burst_cfg["dlta"]) << 6
-                | int(burst_cfg["dlta"]) << 5
-                | int(burst_cfg["dltv"]) << 4
-                | int(burst_cfg["dltv"]) << 3
-                | int(burst_cfg["dltv"]) << 2
-            )
-            self.set_reg(
-                self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDR, _wval, verbose
-            )
-        except KeyError as err:
-            print("** Invalid SIG_CTRL setting")
-            raise InvalidCommandError from err
-
-    def _set_output_rate(self, rate, verbose=False):
-        """Configure Output Data Rate DOUT_RATE
-
-        Parameters
-        ----------
-        rate : int
-            Supported DOUT_RATE to apply
-        verbose : bool
-            If True outputs additional debug info
         Raises
         -------
         InvalidCommandError
-            When unsupported rate is specified
+            When unsupported output_rate is specified
         """
 
+        self._status["dout_rate"] = output_rate
+
+        if verbose:
+            logger.debug(f"Set Output Rate = {output_rate}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting DOUT_RATE register")
+            return
+
         try:
-            writebyte = self.mdef.DOUT_RATE[rate]
+            writebyte = self.mdef.DOUT_RATE[output_rate]
             self.set_reg(
                 self.reg.SMPL_CTRL.WINID,
                 self.reg.SMPL_CTRL.ADDRH,
                 writebyte,
                 verbose,
             )
-            self._status["dout_rate"] = rate
-            if verbose:
-                print(f"Set Output Rate = {rate}")
         except KeyError as err:
-            print("** Invalid DOUT_RATE")
+            logger.error(f"** Invalid DOUT_RATE, Set Output Rate = {output_rate}")
             raise InvalidCommandError from err
 
     def _set_filter(self, filter_type=None, verbose=False):
-        """Configure Filter Type FILTER_SEL
+        """Configure FILTER_SEL and update _status, and
+        if no_init then do not write to registers
 
         Parameters
         ----------
         filter_type : str
-            Supported filter setting to apply.
+            Specify FILTER_SEL type setting
             If None, then auto select based on DOUT_RATE
         verbose : bool
             If True outputs additional debug info
+
         Raises
         -------
         InvalidCommandError
             When unsupported filter_type is specified
         """
 
-        if self._status["dout_rate"] is None:
-            print("Set Output Rate before setting the filter", "filter setting ignored")
+        if self._status.get("dout_rate") is None:
+            logger.warning(
+                "Set Output Rate before setting the filter. " "Filter setting ignored"
+            )
             return
 
-        map_filter = {
-            2000: "MV_AVG0",
-            1000: "MV_AVG2",
-            500: "MV_AVG4",
-            400: "MV_AVG8",
-            250: "MV_AVG8",
-            200: "MV_AVG16",
-            125: "MV_AVG16",
-            100: "MV_AVG32",
-            80: "MV_AVG32",
-            62.5: "MV_AVG32",
-            50: "MV_AVG64",
-            40: "MV_AVG64",
-            31.25: "MV_AVG64",
-            25: "MV_AVG128",
-            20: "MV_AVG128",
-            15.625: "MV_AVG128",
-        }
+        # Get compatible default DOUT_RATE vs FILTER_SEL
+        map_filter = self.mdef.MAP_DOUT_FILTER
 
         # If no filter_type set to "safe" moving average filter based on DOUT_RATE
         if filter_type is None:
             filter_type = map_filter.get(self._status["dout_rate"])
+            print(f"Filter not specified, setting to {filter_type}")
 
         _filter_sel = self.mdef.FILTER_SEL
         # For G370PDF1 & G370PDS0, filter setting is non-standard
@@ -917,6 +903,16 @@ class ImuFn:
             _filter_sel = self.mdef.FILTER_SEL_2K_400_80
 
         filter_type = filter_type.upper()
+
+        self._status["filter_sel"] = filter_type
+
+        if verbose:
+            logger.debug(f"Filter Type = {filter_type}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting FILTER_SEL register")
+            return
+
         try:
             writebyte = _filter_sel[filter_type]
             self.set_reg(
@@ -931,18 +927,13 @@ class ImuFn:
                 result = self.get_reg(
                     self.reg.FILTER_CTRL.WINID, self.reg.FILTER_CTRL.ADDR
                 )
-                if verbose:
-                    print(".", end="")
-            self._status["filter_sel"] = filter_type
-
-            if verbose:
-                print(f"Filter Type = {filter_type}")
         except KeyError as err:
-            print("** Invalid FILTER_SEL")
+            logger.error(f"** Invalid FILTER_SEL, Filter Type = {filter_type}")
             raise InvalidCommandError from err
 
-    def _set_uart_mode(self, mode, verbose=False):
-        """Configure AUTO_START and UART_AUTO bits in UART_CTRL register
+    def _set_uart_mode(self, mode=0x02, verbose=False):
+        """Configure AUTO_START and UART_AUTO bits in UART_CTRL register,
+           update _status, and if no_init do not write to registers
 
         Parameters
         ----------
@@ -952,16 +943,23 @@ class ImuFn:
             If True outputs additional debug info
         """
 
+        self._status["auto_start"] = (mode & 0x02) == 2
+        self._status["uart_auto"] = (mode & 0x01) == 1
+
+        if verbose:
+            logger.debug(f"_set_uart_mode({mode})")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting UART_CTRL register")
+            return
+
         self.set_reg(
             self.reg.UART_CTRL.WINID, self.reg.UART_CTRL.ADDR, mode & 0x03, verbose
         )
-        self._status["auto_start"] = (mode & 0x02) == 2
-        self._status["uart_auto"] = (mode & 0x01) == 1
-        if verbose:
-            print(f"IMU UART Mode = {mode}")
 
-    def _set_ext_sel(self, mode="GPIO", verbose=False):
-        """Configure EXT pin function
+    def _set_ext_sel(self, mode="gpio", verbose=False):
+        """Configure EXT pin function in MSC_CTRL
+           update _status, and if no_init do not write to registers
 
         Parameters
         ----------
@@ -971,12 +969,21 @@ class ImuFn:
             If True outputs additional debug info
         """
 
-        if self.info.get("prod_id").lower() in ["g570pr20"]:
-            print("EXT pin function not supported")
+        if not self.mdef.HAS_FEATURE.get("EXT_PIN"):
+            logger.warning("EXT pin function not supported. Bypassing...")
+            return
+
+        mode = mode.upper()
+        self._status["ext_trigger"] = mode == "TYPEB"
+
+        if verbose:
+            logger.debug(f"EXT_SEL = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting EXT_POL in MSC_CTRL register")
             return
 
         try:
-            mode = mode.upper()
             writebyte = self.mdef.EXT_SEL[mode]
             _tmp = self.get_reg(
                 self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR, verbose
@@ -988,16 +995,13 @@ class ImuFn:
                 verbose,
             )
 
-            self._status["ext_trigger"] = mode == "TYPEB"
-
-            if verbose:
-                print(f"EXT_SEL = {mode}")
         except KeyError as err:
-            print(f"** Invalid EXT_SEL, EXT_SEL = {mode}")
+            logger.error(f"** Invalid EXT_SEL, EXT_SEL = {mode}")
             raise InvalidCommandError from err
 
     def _set_drdy_polarity(self, act_high=True, verbose=False):
-        """Configure DRDY to active HIGH
+        """Configure DRDY to active HIGH in MSC_CTRL
+           update _status, and if no_init do not write to registers
 
         Parameters
         ----------
@@ -1007,6 +1011,15 @@ class ImuFn:
             If True outputs additional debug info
         """
 
+        self._status["drdy_pol"] = act_high
+
+        if verbose:
+            logger.debug(f"DRDY_POL = {act_high}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting DRDY_POL in MSC_CTRL register")
+            return
+
         _tmp = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR, verbose)
         self.set_reg(
             self.reg.MSC_CTRL.WINID,
@@ -1014,77 +1027,56 @@ class ImuFn:
             (_tmp & 0xFD) | int(act_high) << 1,
             verbose,
         )
-        self._status["drdy_pol"] = act_high
-        if verbose:
-            print(f"DRDY_POL = {act_high}")
 
     def _set_accl_range(self, a_range=False, verbose=False):
-        """Configure A_RANGE settings for models that support it
+        """Configure A_RANGE settings for models that support it,
+           update _status, and if no_init do not write to registers
 
         Parameters
         ----------
         a_range : bool
-            True = accel range 16G or False = accel range 8G
+            If true accelerometer range set to high range i.e. 16G
+            Otherwise stay in low range
         verbose : bool
             If True outputs additional debug info
         """
 
-        try:
-            # Accelerometer A_RANGE_CTRL support only for certain models
-            if self.info.get("prod_id").lower() not in [
-                "g330pdg0",
-                "g330pde0",
-                "g366pdg0",
-                "g366pde0",
-                "g370pdg0",
-                "g370pdt0",
-            ]:
-                print("Setting A_RANGE not support in this device")
-                return
+        # Accelerometer A_RANGE_CTRL support only for certain models
+        if not self.mdef.HAS_FEATURE.get("A_RANGE"):
+            if verbose:
+                logger.warning(
+                    "Setting A_RANGE not support in this device. Bypassing..."
+                )
+            return
 
+        self._status["a_range"] = a_range
+
+        if verbose:
+            logger.debug(f"_set_accl_range({a_range})")
+            print(f"A_RANGE = {'16G' if a_range else '8G'}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting A_RANGE in SIG_CTRL register")
+            return
+
+        try:
             self.set_reg(
                 self.reg.DLT_CTRL.WINID,
                 self.reg.DLT_CTRL.ADDRH,
                 a_range,
                 verbose=verbose,
             )
-            self._status["a_range"] = a_range
         except KeyError as err:
-            print("** Failure writing A_RANGE to device")
+            logger.error("** Failure writing A_RANGE to device")
             raise DeviceConfigurationError from err
 
-    def _config_basic(
-        self,
-        dout_rate=200,
-        filter_sel=None,
-        ndflags=False,
-        tempc=False,
-        counter="",
-        chksm=False,
-        auto_start=False,
-        is_32bit=True,
-        a_range=False,
-        ext_trigger=False,
-        uart_auto=True,
-        verbose=False,
-        **cfg,
-    ):
-        """Configure basic settings based on key, value parameters
+    def _config_basic(self, verbose=False):
+        """Configure basic device settings based on self._cfg dict
 
         Parameters
         ----------
-        "dout_rate": int,
-        "filter_sel": str,
-        "ndflags": bool,
-        "tempc": bool,
-        "counter": str,
-        "chksm": bool,
-        "auto_start": bool,
-        "is_32bit": bool,
-        "a_range": bool,
-        "ext_trigger": bool,
-        "uart_auto": bool,
-        "verbose": bool,
+        verbose : bool
+            If True outputs additional debug info
 
         Raises
         ----------
@@ -1092,68 +1084,34 @@ class ImuFn:
             When unsupported configuration provided
         """
 
+        if verbose:
+            logger.debug(f"_config_basic:\nself._cfg:({self._cfg})")
+
+        no_init = self._cfg.get("no_init", False)
+
         try:
-            if ext_trigger is True:
-                self._set_ext_sel("typeb", verbose=verbose)
-            elif counter == "reset":
-                self._set_ext_sel("reset", verbose=verbose)
-            elif counter == "sample":
-                self._set_ext_sel("gpio", verbose=verbose)
-            else:
-                self._set_ext_sel("gpio", verbose=verbose)
-            self._set_drdy_polarity(True, verbose=verbose)
-            self._set_output_rate(dout_rate, verbose=verbose)
-            self._set_filter(filter_sel, verbose=verbose)
-
-            _wval = int(auto_start) << 1 | int(uart_auto)
-            self._set_uart_mode(_wval, verbose=verbose)
-
-            self._set_accl_range(a_range, verbose=verbose)
-
-            # BURST_CTRL1 HIGH for cfg
-            _wval = (
-                int(ndflags) << 7
-                | int(tempc) << 6
-                | 1 << 5  # Gyro always enabled
-                | 1 << 4  # Accel always enabled
-                | 0 << 3  # DLTA
-                | 0 << 2  # DLTV
-                | 0 << 1  # QTN
-                | 0  # ATTI
-            )
-            self.set_reg(
-                self.reg.BURST_CTRL1.WINID,
-                self.reg.BURST_CTRL1.ADDRH,
-                _wval,
-                verbose=verbose,
-            )
-            self._status["ndflags"] = ndflags
-            self._status["tempc"] = tempc
-
-            # BURST_CTRL1 LOW for cfg
-            _wval = int(bool(counter)) << 1 | int(chksm)
-            self.set_reg(
-                self.reg.BURST_CTRL1.WINID,
-                self.reg.BURST_CTRL1.ADDR,
-                _wval,
-                verbose=verbose,
-            )
-            self._status["counter"] = counter
-            self._status["chksm"] = chksm
-
-            # BURST_CTRL2 for cfg
-            _wval = 0x7F if is_32bit else 0x00
-            self.set_reg(
-                self.reg.BURST_CTRL2.WINID,
-                self.reg.BURST_CTRL2.ADDRH,
-                _wval,
-                verbose=verbose,
-            )
-            self._status["is_32bit"] = is_32bit
+            # EXT_SEL
+            self._config_ext_sel(verbose)
+            # DOUT_RATE
+            self._set_output_rate(self._cfg.get("dout_rate", 200), verbose)
+            # FILTER_SEL
+            self._set_filter(self._cfg.get("filter_sel"), verbose)
+            # UART_CTRL
+            auto_start = self._cfg.get("auto_start", False)
+            uart_auto = self._cfg.get("uart_auto", False)
+            mode = int(auto_start) << 1 | int(uart_auto)
+            self._set_uart_mode(mode, verbose)
+            # A_RANGE
+            self._set_accl_range(self._cfg.get("a_range", False), verbose)
+            # BURST_CTRL1
+            self._config_burst_ctrl1(verbose)
+            # BURST_CTRL2
+            self._config_burst_ctrl2(verbose)
 
             # Disable ATTI mode as default action
             # It will be re-enabled if needed by _config_dlt() or _config_atti()
-            try:
+
+            if self.mdef.HAS_FEATURE.get("ATTI_ON_REG") and not no_init:
                 disable = 0x00
                 self.set_reg(
                     self.reg.ATTI_CTRL.WINID,
@@ -1161,15 +1119,16 @@ class ImuFn:
                     disable,
                     verbose=verbose,
                 )
-            except AttributeError:
-                # If ATTI_CTRL does not exist for G320, G354, G364 so bypass
-                pass
+
             print("Configured basic")
+
             # If UART_AUTO then ignore setting SIG_CTRL
             if uart_auto is True:
                 return
 
-            # SIG_CTRL for cfg - tempc, gyro, accl
+            # SIG_CTRL - tempc, gyro, accl
+
+            tempc = self._cfg.get("tempc", False)
             _wval = int(tempc) << 7 | 7 << 4 | 7 << 1  # GyroXYZ  # AcclXYZ
             self.set_reg(
                 self.reg.SIG_CTRL.WINID,
@@ -1178,27 +1137,16 @@ class ImuFn:
                 verbose=verbose,
             )
         except KeyError as err:
-            print("** Failure writing basic configuration to device")
+            logger.error("** Failure writing basic configuration to device")
             raise DeviceConfigurationError from err
 
-    def _config_dlt(
-        self,
-        dlta=False,
-        dltv=False,
-        dlta_sf_range=12,
-        dltv_sf_range=12,
-        verbose=False,
-        **cfg,
-    ):
-        """Configure delta angle/velocity settings based on key, value parameters
+    def _config_dlt(self, verbose=False):
+        """Configure delta angle/velocity settings self._cfg dict
 
         Parameters
         ----------
-        "dlta": bool,
-        "dltv": bool,
-        "dlta_sf_range": int,
-        "dltv_sf_range": int,
-        "verbose" : bool, If True outputs additional debug info
+        verbose : bool
+            If True outputs additional debug info
 
         Raises
         ----------
@@ -1206,17 +1154,39 @@ class ImuFn:
             When unsupported configuration provided
         """
 
-        if self.info.get("prod_id").lower() in ["g570pr20"]:
-            print("Delta angle / velocity function not supported. Bypassing.")
+        if self.mdef.HAS_FEATURE.get("DLT_OUTPUT") is False:
+            if verbose:
+                logger.warning(
+                    "Delta angle / velocity function not supported. Bypassing..."
+                )
             return
+
+        dlta = self._cfg.get("dlta", False)
+        dltv = self._cfg.get("dltv", False)
+        dlta_sf_range = self._cfg.get("dlta_sf_range", 12)
+        dltv_sf_range = self._cfg.get("dltv_sf_range", 12)
 
         # Exit if both DLTA and DLTV are disabled
         if dlta is False and dltv is False:
-            print("Delta angle / velocity function disabled. Bypassing.")
+            if verbose:
+                logger.debug("Delta angle / velocity function disabled. Bypassing.")
+            return
+
+        if verbose:
+            logger.debug(f"_config_dlt:\nself._cfg:({self._cfg})")
+
+        self._status["dlta_sf_range"] = dlta_sf_range
+        self._status["dltv_sf_range"] = dltv_sf_range
+        self._status["dlta"] = dlta
+        self._status["dltv"] = dltv
+
+        # When no_init is True, do not write to registers
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting DLT register")
             return
 
         try:
-            # DLT_CTRL for cfg
+            # DLT_CTRL
             _wval = (dlta_sf_range & 0xF) << 4 | (dltv_sf_range & 0xF)
             self.set_reg(
                 self.reg.DLT_CTRL.WINID,
@@ -1224,10 +1194,8 @@ class ImuFn:
                 _wval,
                 verbose=verbose,
             )
-            self._status["dlta_sf_range"] = dlta_sf_range
-            self._status["dltv_sf_range"] = dltv_sf_range
 
-            # BURST_CTRL1 HIGH for cfg
+            # BURST_CTRL1 HIGH
             _tmp = self.get_reg(
                 self.reg.BURST_CTRL1.WINID,
                 self.reg.BURST_CTRL1.ADDR,
@@ -1240,19 +1208,12 @@ class ImuFn:
                 _wval,
                 verbose=verbose,
             )
-            self._status["dlta"] = dlta
-            self._status["dltv"] = dltv
 
-            # ATTI_CTRL does not exist for these models
-            has_atti_ctrl = self.info.get("prod_id").lower() not in [
-                "g320pdg0",
-                "g320pdgn",
-                "g354pdh0",
-                "g364pdc0",
-                "g364pdca",
-            ]
+            # Check ATTI_CTRL exists for this device
+            has_atti_ctrl = self.mdef.HAS_FEATURE.get("ATTI_ON_REG")
+
             if has_atti_ctrl is True:
-                # ATTI_CTRL for cfg
+                # ATTI_CTRL
                 _tmp = self.get_reg(
                     self.reg.ATTI_CTRL.WINID, self.reg.ATTI_CTRL.ADDR, verbose=verbose
                 )
@@ -1280,29 +1241,18 @@ class ImuFn:
                 verbose=verbose,
             )
         except KeyError as err:
-            print("** Failure writing delta angle/velocity configuration to device")
+            logger.error(
+                "** Failure writing delta angle/velocity configuration to device"
+            )
             raise DeviceConfigurationError from err
 
-    def _config_atti(
-        self,
-        atti=False,
-        atti_mode="euler",
-        atti_conv=0,
-        atti_profile="modea",
-        qtn=False,
-        verbose=False,
-        **cfg,
-    ):
-        """Configure attitude or quaternion settings based on key, value parameters
+    def _config_atti(self, verbose=False):
+        """Configure attitude or quaternion settings based on self._cfg dict
 
         Parameters
         ----------
-        "atti": bool,
-        "atti_mode": str,
-        "atti_conv": int,
-        "atti_profile": str,
-        "qtn": bool,
-        "verbose" : bool, If True outputs additional debug info
+        verbose : bool
+            If True outputs additional debug info
 
         Raises
         ----------
@@ -1311,35 +1261,53 @@ class ImuFn:
         """
 
         # Exit if model does not support the attitude function
-        has_attitude_function = self.info.get("prod_id").lower() in [
-            "g330pde0",
-            "g330pdg0",
-            "g366pde0",
-            "g366pdg0",
-            "g365pdf1",
-            "g365pdc1",
-        ]
-        if has_attitude_function is False:
-            print("Attitude or quaternion not supported. Bypassing.")
+        has_attitude_function = self.mdef.HAS_FEATURE.get("ATTI_OUTPUT")
+        if not has_attitude_function:
+            if verbose:
+                logger.warning("Attitude or quaternion not supported. Bypassing...")
             return
+
+        atti = self._cfg.get("atti", False)
+        atti_mode = self._cfg.get("atti_mode", "euler")
+        atti_conv = self._cfg.get("atti_conv", 0)
+        atti_profile = self._cfg.get("atti_profile", "modea")
+        qtn = self._cfg.get("qtn", False)
 
         # Exit if both ATTI and QTN are disabled
         if atti is False and qtn is False:
-            print("Attitude or quaternion disabled. Bypassing.")
+            if verbose:
+                logger.warning("Attitude or quaternion disabled. Bypassing...")
             return
 
         # Exit if DLT is enabled
-        if cfg.get("dlta") or cfg.get("dltv"):
-            print("Delta angle / velocity is enabled. Bypassing attitude / quaternion.")
+        if self._cfg.get("dlta") or self._cfg.get("dltv"):
+            if verbose:
+                logger.warning(
+                    "Delta angle / velocity is enabled. Bypassing attitude / quaternion."
+                )
             return
 
         # Exit if ATTI_CONV not between 0 or 23
         if atti_conv < 0 or atti_conv > 23:
-            print("ATTI_CONV must be between 0 and 23. Bypassing.")
+            logger.warning("ATTI_CONV must be between 0 and 23. Bypassing...")
+            return
+
+        self._status["qtn"] = qtn
+        self._status["atti"] = atti
+        self._status["atti_mode"] = atti_mode
+        self._status["atti_conv"] = atti_conv
+        self._status["atti_profile"] = atti_profile
+
+        if verbose:
+            logger.debug(f"_config_atti\nself._cfg:({self._cfg})")
+
+        # When no_init is True, do not write to registers
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting ATTI registers")
             return
 
         try:
-            # BURST_CTRL1 HIGH for cfg
+            # BURST_CTRL1 HIGH
             _tmp = self.get_reg(
                 self.reg.BURST_CTRL1.WINID,
                 self.reg.BURST_CTRL1.ADDR,
@@ -1352,10 +1320,8 @@ class ImuFn:
                 _wval,
                 verbose=verbose,
             )
-            self._status["qtn"] = qtn
-            self._status["atti"] = atti
 
-            # ATTI_CTRL HIGH for cfg
+            # ATTI_CTRL HIGH
             _tmp = self.get_reg(
                 self.reg.ATTI_CTRL.WINID,
                 self.reg.ATTI_CTRL.ADDR,
@@ -1375,7 +1341,6 @@ class ImuFn:
                 _wval,
                 verbose=verbose,
             )
-            self._status["atti_mode"] = atti_mode
 
             # ATTI_CTRL LOW
             self.set_reg(
@@ -1384,7 +1349,6 @@ class ImuFn:
                 atti_conv,
                 verbose=verbose,
             )
-            self._status["atti_conv"] = atti_conv
 
             # GLOB_CMD2 for cfg
             _wval = self.mdef.ATTI_MOTION_PROFILE[atti_profile.upper()] << 4
@@ -1397,10 +1361,12 @@ class ImuFn:
                 verbose=verbose,
             )
             time.sleep(self.mdef.ATTI_MOTION_SETTING_DELAY_S)
-            self._status["atti_profile"] = atti_profile
+
             print("Configured attitude / quaternion")
         except KeyError as err:
-            print("** Failure writing attitude or quaternion configuration to device")
+            logger.error(
+                "** Failure writing attitude or quaternion configuration to device"
+            )
             raise DeviceConfigurationError from err
 
     def _get_sample(self, inter_delay=0.000001, verbose=False):
@@ -1427,16 +1393,16 @@ class ImuFn:
             When header byte and delimiter byte is missing, find next header byte,
             and re-raise InvalidBurstReadError
         KeyboardInterrupt
-            When CTRL-C occurs and re-raise
+            When CTRL-C occurs, re-raise
         """
 
         # Return if struct is empty, then device is not configured
         if self._b_struct == "":
-            print("** Device not configured. Have you run set_config()?")
+            logger.error("** Device not configured. Have you run set_config()?")
             raise InvalidCommandError
         # Return if still in CONFIG mode
         if self._status.get("is_config"):
-            print("** Device not in SAMPLING mode. Run goto('sampling') first.")
+            logger.error("** Device not in SAMPLING mode. Run goto('sampling') first.")
             raise InvalidCommandError
         # Get data structure of the burst
         data_struct = struct.Struct(self._b_struct)
@@ -1454,7 +1420,7 @@ class ImuFn:
             if (data_unpacked[0] != self.mdef.BURST_MARKER) or (
                 data_unpacked[-1] != self.mdef.DELIMITER
             ):
-                print("** Missing Header or Delimiter")
+                logger.warning("** Missing Header or Delimiter")
                 raise InvalidBurstReadError
 
             # Strip out the header and delimiter byte
@@ -1467,7 +1433,7 @@ class ImuFn:
             raise
 
     def _proc_sample(self, raw_burst=()):
-        """Process parameter as single burst read of device data
+        """Process as single burst read of device data
         Returns processed data in a tuple or () if empty burst
 
         Parameters
@@ -1483,9 +1449,9 @@ class ImuFn:
         Raises
         -------
         InvalidBurstReadError
-            If raw_burst is ()
+            If raw_burst is False
         KeyboardInterrupt
-            When CTRL-C occurs and re-raise
+            When CTRL-C occurs re-raise
         """
 
         try:
@@ -1504,7 +1470,7 @@ class ImuFn:
 
             sf_dlta = 0
             sf_dltv = 0
-            dlt_supported = self.info.get("prod_id").lower() not in ["g570pr20"]
+            dlt_supported = self.mdef.HAS_FEATURE.get("DLT_OUTPUT")
             if dlt_supported:
                 if self._status.get("dlta_sf_range") is not None:
                     sf_dlta = self.mdef.SF_DLTA * 2 ** self._status.get("dlta_sf_range")
@@ -1519,12 +1485,7 @@ class ImuFn:
             sf_qtn = 1 / 2**14
 
             # Set ATTI_SF to 0 for unsupported models
-            atti_supported = self.info["prod_id"].lower() in [
-                "g330pdg0",
-                "g366pdg0",
-                "g365pdf1",
-                "g365pdc1",
-            ]
+            atti_supported = self.mdef.HAS_FEATURE.get("ATTI_OUTPUT")
             sf_atti = 0
             if atti_supported:
                 sf_atti = self.mdef.SF_ATTI
@@ -1561,3 +1522,109 @@ class ImuFn:
         except KeyboardInterrupt:
             print("CTRL-C: Exiting")
             raise
+
+    def _config_ext_sel(self, verbose=False):
+        """Configure EXT_SEL setting based on self._cfg
+        Exit early and do nothing if no_init is True
+
+        Parameters
+        ----------
+        verbose : bool
+            If True outputs additional debug info
+        """
+
+        counter = self._cfg.get("counter", "")
+        ext_trigger = self._cfg.get("ext_trigger", False)
+
+        if verbose:
+            logger.debug(
+                f"_config_ext_sel(counter={counter}, "
+                f"ext_trigger={ext_trigger}, verbose={verbose})"
+            )
+
+        # _set_ext_sel() check for --no_init
+        if ext_trigger is True:
+            self._set_ext_sel("typeb", verbose=verbose)
+        elif counter == "reset":
+            self._set_ext_sel("reset", verbose=verbose)
+        elif counter == "sample":
+            self._set_ext_sel("gpio", verbose=verbose)
+        else:
+            self._set_ext_sel("gpio", verbose=verbose)
+
+    def _config_burst_ctrl1(self, verbose=False):
+        """Configure BURST_CTRL1,
+           update _status, and if no_init do not write to registers
+
+        Parameters
+        ----------
+        verbose : bool
+            If True outputs additional debug info
+        """
+
+        ndflags = self._cfg.get("ndflags", False)
+        tempc = self._cfg.get("tempc", False)
+        counter = self._cfg.get("counter", "")
+        chksm = self._cfg.get("chksm", False)
+        verbose = self._cfg.get("verbose", False)
+
+        self._status["ndflags"] = ndflags
+        self._status["tempc"] = tempc
+        self._status["counter"] = counter
+        self._status["chksm"] = chksm
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting BURST_CTRL1 register")
+            return
+
+        # BURST_CTRL1 HIGH
+        _wval = (
+            int(ndflags) << 7
+            | int(tempc) << 6
+            | 1 << 5  # Gyro always enabled
+            | 1 << 4  # Accel always enabled
+            | 0 << 3  # DLTA
+            | 0 << 2  # DLTV
+            | 0 << 1  # QTN
+            | 0  # ATTI
+        )
+        self.set_reg(
+            self.reg.BURST_CTRL1.WINID,
+            self.reg.BURST_CTRL1.ADDRH,
+            _wval,
+            verbose=verbose,
+        )
+        _wval = int(bool(counter)) << 1 | int(chksm)
+        self.set_reg(
+            self.reg.BURST_CTRL1.WINID,
+            self.reg.BURST_CTRL1.ADDR,
+            _wval,
+            verbose=verbose,
+        )
+
+    def _config_burst_ctrl2(self, verbose=False):
+        """Configure BURST_CTRL2
+           update _status, and if no_init do not write to registers
+
+        Parameters
+        ----------
+        verbose : bool
+            If True outputs additional debug info
+        """
+
+        is_32bit = self._cfg.get("is_32bit", False)
+        verbose = self._cfg.get("verbose", False)
+
+        self._status["is_32bit"] = is_32bit
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting BURST_CTRL2 register")
+            return
+
+        # BURST_CTRL2
+        _wval = 0x7F if is_32bit else 0x00
+        self.set_reg(
+            self.reg.BURST_CTRL2.WINID,
+            self.reg.BURST_CTRL2.ADDRH,
+            _wval,
+            verbose=verbose,
+        )

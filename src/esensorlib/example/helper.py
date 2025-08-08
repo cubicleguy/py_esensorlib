@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -251,7 +251,7 @@ class LoggerHelper:
                 "atti": "deg/bit",
                 "dlta": "deg/bit",
                 "dltv": "(m/s)/bit",
-                "tilt": "urad/bit",
+                "tilt": "rad/bit",
                 "vel": "(mm/s)/bit",
                 "disp": "(mm)/bit",
             }
@@ -359,9 +359,9 @@ class LoggerHelper:
             map_cols_scaled.update(dict.fromkeys(["qtn_1", "qtn32_1"], "q1"))
             map_cols_scaled.update(dict.fromkeys(["qtn_2", "qtn32_2"], "q2"))
             map_cols_scaled.update(dict.fromkeys(["qtn_3", "qtn32_3"], "q3"))
-            map_cols_scaled.update(dict.fromkeys(["tiltx"], "Tx[urad]"))
-            map_cols_scaled.update(dict.fromkeys(["tilty"], "Ty[urad]"))
-            map_cols_scaled.update(dict.fromkeys(["tiltz"], "Tz[urad]"))
+            map_cols_scaled.update(dict.fromkeys(["tiltx"], "Tx[rad]"))
+            map_cols_scaled.update(dict.fromkeys(["tilty"], "Ty[rad]"))
+            map_cols_scaled.update(dict.fromkeys(["tiltz"], "Tz[rad]"))
             map_cols_scaled.update(dict.fromkeys(["velx"], "Vx[mm/s]"))
             map_cols_scaled.update(dict.fromkeys(["vely"], "Vy[mm/s]"))
             map_cols_scaled.update(dict.fromkeys(["velz"], "Vz[mm/s]"))
