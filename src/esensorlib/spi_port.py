@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -33,5 +33,5 @@ class SpiPort:
     SPI Port Interface (not implemented yet)
     """
 
-    def __init__(self, port, speed=1000000, verbose=False):
+    def __init__(self, port, speed=1000000, verbose=False, **kwargs):
         raise IOError("** SPI Interface is not implemented yet")

@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2024 Seiko Epson Corporation
+# Copyright (c) 2024, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -32,6 +32,7 @@ import argparse
 import sys
 import time
 
+from loguru import logger
 from tqdm import tqdm
 
 from esensorlib import sensor_device
@@ -39,226 +40,268 @@ from esensorlib.example import helper
 
 SUPPORTED_MODELS = [
     "a352ad10",
+    "a370ad10",
 ]
 
-parser = argparse.ArgumentParser(
-    description="This program is intended as \
-                                 sample code for evaluation testing \
-                                 the Epson device. This \
-                                 program will initialize the device with \
-                                 user specified arguments and retrieve \
-                                 sensor data and format the output to \
-                                 console or CSV file. Other misc. utility \
-                                 functions are described in the help \
-                                 "
-)
 
-group_bfields = parser.add_argument_group("output field options")
-group_flash = parser.add_argument_group("flash-related options")
-group_debug = parser.add_argument_group("debug options")
-group_csv = parser.add_argument_group("csv options")
+def get_args():
+    """
+    returns parsed arguments
+    """
+    parser = argparse.ArgumentParser(
+        description="This program is intended as sample code for "
+        "evaluation testing the Epson device. This "
+        "program will initialize the device with user "
+        "specified arguments and retrieve sensor data "
+        "and format the output to console or CSV file. "
+        "Other misc. utility functions are described "
+        "in the help."
+    )
 
-mutual_smpl_time = parser.add_mutually_exclusive_group()
+    group_bfields = parser.add_argument_group("output field options")
+    group_flash = parser.add_argument_group("flash-related options")
+    group_debug = parser.add_argument_group("debug options")
+    group_csv = parser.add_argument_group("csv options")
 
-parser.add_argument(
-    "-s",
-    "--serial_port",
-    help="specifies the serial port comxx or /dev/ttyUSBx",
-    type=str,
-)
+    mutual_smpl_time = parser.add_mutually_exclusive_group()
 
-parser.add_argument(
-    "-b",
-    "--baud_rate",
-    help="specifies baudrate of the serial port, default is 460800. \
-    Not all devices support range of baudrates",
-    type=int,
-    choices=[460800, 230400, 115200],
-    default=460800,
-)
+    parser.add_argument(
+        "-s",
+        "--serial_port",
+        help="specifies the serial port comxx or /dev/ttyUSBx.",
+        type=str,
+    )
 
-mutual_smpl_time.add_argument(
-    "--secs",
-    help="specifies time duration of reading sensor data in \
-                    seconds, default 5 seconds. \
-                    Press CTRL-C to abort and exit early",
-    type=float,
-    default=5,
-)
+    parser.add_argument(
+        "-b",
+        "--baud_rate",
+        help="specifies baudrate of the serial port, default is 460800. "
+        "Not all devices support range of baudrates. This assumes "
+        "the device serial port baudrate is already configured. "
+        "Refer to device datasheet.",
+        type=int,
+        choices=[460800, 230400, 115200],
+        default=460800,
+    )
 
-mutual_smpl_time.add_argument(
-    "--samples",
-    help="specifies the approx number samples to read sensor \
-                    data. \
-                    Press CTRL-C to abort and exit early",
-    type=int,
-)
+    mutual_smpl_time.add_argument(
+        "--secs",
+        help="specifies time duration of reading sensor data in "
+        "seconds, default 5 seconds. Press CTRL-C to abort "
+        "and exit early.",
+        type=float,
+        default=5,
+    )
 
-parser.add_argument(
-    "--drate",
-    help="specifies ACCL output data rate in sps, \
-                    default is 200sps",
-    type=float,
-    choices=[
-        1000,
-        500,
-        200,
-        100,
-        50,
-    ],
-    default=200,
-)
+    mutual_smpl_time.add_argument(
+        "--samples",
+        help="specifies the approx number samples to read sensor "
+        "data. Press CTRL-C to abort and exit early.",
+        type=int,
+    )
 
-parser.add_argument(
-    "--filter",
-    help="specifies the filter selection. If not specified, \
-                    filter based on selected output data rate \
-                    will automatically be selected. \
-                    NOTE: Refer to datasheet for valid settings. \
-         ",
-    type=str.lower,
-    choices=[
-        "k64_fc83",
-        "k64_fc220",
-        "k128_fc36",
-        "k128_fc110",
-        "k128_fc350",
-        "k512_fc9",
-        "k512_fc16",
-        "k512_fc60",
-        "k512_fc210",
-        "k512_fc460",
-    ],
-)
+    parser.add_argument(
+        "--drate",
+        help="specifies ACCL output data rate in sps, default is 200sps.",
+        type=float,
+        choices=[
+            1000,
+            500,
+            200,
+            100,
+            50,
+        ],
+        default=200,
+    )
 
-parser.add_argument(
-    "--model",
-    help="specifies the ACCL model type, if not specified will auto-detect",
-    type=str.lower,
-    choices=SUPPORTED_MODELS,
-)
+    parser.add_argument(
+        "--filter",
+        help="specifies the filter selection. If not specified, "
+        "filter based on selected output data rate "
+        "will automatically be selected. NOTE: Refer to datasheet "
+        "for valid settings.",
+        type=str.lower,
+        choices=[
+            "k64_fc83",
+            "k64_fc220",
+            "k128_fc36",
+            "k128_fc110",
+            "k128_fc350",
+            "k512_fc9",
+            "k512_fc16",
+            "k512_fc60",
+            "k512_fc210",
+            "k512_fc460",
+        ],
+    )
 
-group_csv.add_argument(
-    "--csv",
-    help="specifies to read sensor data to CSV file otherwise sends \
-                     to console.",
-    action="store_true",
-)
+    parser.add_argument(
+        "--model",
+        help="specifies the ACCL model type, if not specified will auto-detect.",
+        type=str.lower,
+        choices=SUPPORTED_MODELS,
+    )
 
-parser.add_argument(
-    "--tilt",
-    help="specifies tilt output for each X-Y-Z axes as a 3-bit \
-                    enable mask (a 1 in bit position enables tilt \
-                    output on that axis)",
-    type=int,
-    choices=[0, 1, 2, 3, 4, 5, 6, 7],
-    default=0,
-)
+    group_csv.add_argument(
+        "--csv",
+        help="specifies to read sensor data to CSV file otherwise sends " "to console.",
+        action="store_true",
+    )
 
-parser.add_argument(
-    "--noscale",
-    help="specifies to keep sensor data as digital counts \
-                    (without applying scale factor conversion)",
-    action="store_true",
-)
+    parser.add_argument(
+        "--tilt",
+        help="specifies tilt output for each X-Y-Z axes as a 3-bit enable "
+        "mask (a 1 in bit position enables tilt output on that axis).",
+        type=int,
+        choices=[0, 1, 2, 3, 4, 5, 6, 7],
+        default=0,
+    )
 
-group_bfields.add_argument(
-    "--ndflags",
-    help="specifies to enable ND/EA flags in sensor data",
-    action="store_true",
-)
+    parser.add_argument(
+        "--noscale",
+        help="specifies to keep sensor data as digital counts (without "
+        "applying scale factor conversion).",
+        action="store_true",
+    )
 
-group_bfields.add_argument(
-    "--tempc",
-    help="specifies to enable temperature data in sensor data",
-    action="store_true",
-)
+    parser.add_argument(
+        "--reduced_noise",
+        help="specifies to enabled reduced noise floor condition."
+        "Otherwise, standard noise floor condition selected.",
+        action="store_true",
+    )
 
-group_bfields.add_argument(
-    "--chksm",
-    help="specifies to enable 16-bit checksum in sensor data",
-    action="store_true",
-)
+    parser.add_argument(
+        "--dis_temp_stabil",
+        help="specifies to disable bias stabilization against thermal "
+        "shock. Otherwise, enabled.",
+        action="store_true",
+    )
 
-parser.add_argument(
-    "--counter",
-    help="specifies to enable sample counter in the sensor data",
-    action="store_true",
-)
+    group_bfields.add_argument(
+        "--ndflags",
+        help="specifies to enable ND/EA flags in sensor data.",
+        action="store_true",
+    )
 
-parser.add_argument(
-    "--ext_trigger",
-    help="specifies to enable external trigger on EXT pin",
-    action="store_true",
-)
+    group_bfields.add_argument(
+        "--tempc",
+        help="specifies to enable temperature data in sensor data.",
+        action="store_true",
+    )
 
-group_flash.add_argument(
-    "--autostart",
-    help="Enables AUTO_START function. Run logger again afterwards with --flash_update \
-                    to store the register settings to device flash",
-    action="store_true",
-)
+    group_bfields.add_argument(
+        "--chksm",
+        help="specifies to enable 16-bit checksum in sensor data.",
+        action="store_true",
+    )
 
-group_flash.add_argument(
-    "--init_default",
-    help="This sets the flash setting back to \
-                    default register settings per datasheet.",
-    action="store_true",
-)
+    parser.add_argument(
+        "--counter",
+        help="specifies to enable sample counter in the sensor data.",
+        action="store_true",
+    )
 
-group_flash.add_argument(
-    "--flash_update",
-    help="specifies to store current \
-                    register settings to device flash.",
-    action="store_true",
-)
+    parser.add_argument(
+        "--ext_trigger",
+        help="specifies the external trigger mode on EXT pin. "
+        "NOTE: Refer to datasheet for valid settings for the model.",
+        type=str.lower,
+        choices=[
+            "disabled",
+            "ext_trig_pos",
+            "ext_trig_neg",
+            "1pps_pos",
+            "1pps_neg",
+        ],
+        default="disabled",
+    )
 
-group_debug.add_argument(
-    "--dump_reg",
-    help="specifies to read out all the registers \
-                    from the device without configuring device",
-    action="store_true",
-)
+    group_flash.add_argument(
+        "--autostart",
+        help="Enables AUTO_START function. Run logger again afterwards "
+        "with --flash_update to store current register settings "
+        "to device flash.",
+        action="store_true",
+    )
 
-group_debug.add_argument(
-    "--verbose",
-    help="specifies to enable low-level register messages \
-                    for debugging",
-    action="store_true",
-)
+    group_flash.add_argument(
+        "--init_default",
+        help="This sets the device flash setting back to default "
+        "register settings per datasheet.",
+        action="store_true",
+    )
 
-group_csv.add_argument(
-    "--tag",
-    help="specifies extra string to append to end of the \
-                    filename if CSV is enabled",
-    type=str,
-    default=None,
-)
+    group_flash.add_argument(
+        "--flash_update",
+        help="specifies to store the current device register settings "
+        "to device flash without configuring the device. Run the "
+        "logger program with desired settings first, before "
+        "re-running with the --flash_update option.",
+        action="store_true",
+    )
 
-group_csv.add_argument(
-    "--max_rows",
-    help="specifies to split CSV files when # of samples exceeds \
-          max_rows",
-    type=int,
-)
+    group_debug.add_argument(
+        "--dump_reg",
+        help="specifies to read out all the registers from the "
+        "device without configuring device.",
+        action="store_true",
+    )
 
-args = parser.parse_args()
+    group_debug.add_argument(
+        "--no_init",
+        help="specifies to NOT initialize the device and assumes "
+        "device is pre-configured for with --autostart and "
+        "already in SAMPLING mode.\n"
+        "NOTE: User-specified options must match device programmed "
+        " --autostart settings.",
+        action="store_true",
+    )
+
+    group_debug.add_argument(
+        "--verbose",
+        help="specifies to enable low-level register messages " "for debugging.",
+        action="store_true",
+    )
+
+    group_csv.add_argument(
+        "--tag",
+        help="specifies an extra string to append to end of the "
+        "filename if CSV is enabled.",
+        type=str,
+        default=None,
+    )
+
+    group_csv.add_argument(
+        "--max_rows",
+        help="specifies to split CSV files when the number of samples "
+        "exceeds specified max_rows.",
+        type=int,
+    )
+
+    return parser.parse_args()
 
 
 def supported_device_model(prod_id):
     """
-    returns PROD_ID as string
+    returns True if PROD_ID is in supported models list
     """
     return prod_id.lower() in SUPPORTED_MODELS
 
 
 if __name__ == "__main__":
-    # Output parsed command parameters
+    # Parse arguments
+    args = get_args()
     if args.verbose:
-        print(args)
+        logger.debug(f"args = {args}")
 
     # Set the sensor model parameter
     if not args.model:
+        if args.no_init:
+            print(
+                "When using --no_init, device model must be specified with --model <model name>"
+            )
+            sys.exit(1)
         args.model = "auto"
         print("Model not specified, attempting to auto-detect")
 
@@ -291,6 +334,7 @@ if __name__ == "__main__":
             if_type="uart",
             model=args.model,
             verbose=args.verbose,
+            no_init=args.no_init,
         )
     except IOError:
         print("Port Error: Unable to initialize device")
@@ -301,11 +345,9 @@ if __name__ == "__main__":
     if args.dump_reg:
         accl.get_regdump()
         sys.exit(0)
-    # If init_default enabled
     if args.init_default:
         accl.init_backup(verbose=args.verbose)
         sys.exit(0)
-    # If flash backup enabled
     if args.flash_update:
         accl.backup_flash(verbose=args.verbose)
         sys.exit(0)
@@ -321,9 +363,14 @@ if __name__ == "__main__":
         "auto_start": args.autostart,
         "ext_trigger": args.ext_trigger,
         "tilt": args.tilt,
+        "reduced_noise": args.reduced_noise,
+        "temp_stabil": not args.dis_temp_stabil,
+        "verbose": args.verbose,
+        "no_init": args.no_init,
     }
     if args.verbose:
-        print("device_cfg: ", device_cfg)
+        logger.debug(f"device_cfg: {device_cfg}")
+
     # Configure device with configuration dict
     accl.set_config(**device_cfg)
     # Create helper for handling sensor data after
@@ -342,7 +389,7 @@ if __name__ == "__main__":
     if args.csv:
         fname_param = fn_list
 
-    accl.goto("Sampling", verbose=args.verbose)
+    accl.goto("sampling")
     try:
         if args.csv and args.max_rows:
             # Append file_index for csv output and max_rows
@@ -365,7 +412,7 @@ if __name__ == "__main__":
                 log.write(sample_data=accl.read_sample(verbose=args.verbose))
     except KeyboardInterrupt:
         pass
-    accl.goto("Config", verbose=args.verbose)
+    accl.goto("config")
     log.write_footer()
     log.get_dev_status()
     sys.exit(0)

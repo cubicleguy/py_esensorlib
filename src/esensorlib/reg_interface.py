@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -28,6 +28,8 @@ Contains:
 """
 
 import importlib
+
+from loguru import logger
 
 
 class RegInterface:
@@ -112,7 +114,9 @@ class RegInterface:
         read_data = self.port_io.get_raw16(regaddr, verbose=False)
 
         if verbose:
-            print(f"REG[0x{regaddr & 0xFE:02X}, W({winnum:X})] -> 0x{read_data:04X}")
+            logger.debug(
+                f"REG[0x{regaddr & 0xFE:02X}, W({winnum:X})] -> 0x{read_data:04X}"
+            )
 
         return read_data
 
@@ -135,7 +139,9 @@ class RegInterface:
         self.port_io.set_raw8(regaddr, write_byte, verbose=False)
 
         if verbose:
-            print(f"REG[0x{regaddr & 0xFF:02X}, W({winnum:X})] <- 0x{write_byte:02X}")
+            logger.debug(
+                f"REG[0x{regaddr & 0xFF:02X}, W({winnum:X})] <- 0x{write_byte:02X}"
+            )
 
     def get_device_info(self, verbose=False):
         """Returns PRODID, VERSION_ID, SERIAL_ID as dict.
@@ -163,7 +169,7 @@ class RegInterface:
         }
 
     def _get_prod_id(self, verbose=False):
-        """Reaturn Product ID as ASCII"""
+        """Return Product ID as ASCII"""
 
         result = []
         result.append(self.get_reg(self.reg.PROD_ID1.WINID, self.reg.PROD_ID1.ADDR))
@@ -177,11 +183,9 @@ class RegInterface:
             prodcode.append(item >> 8)
 
         if verbose:
-            print("\nPRODUCT ID raw byte code returned:")
-            print(prodcode)
-            print(
-                "\nIMU PRODUCT ID ASCII conversion:\t"
-                + "".join(chr(i) for i in prodcode)
+            logger.debug(f"PRODUCT ID raw byte code returned: {prodcode}")
+            logger.debug(
+                f"IMU PRODUCT ID ASCII conversion:\t {''.join(chr(i) for i in prodcode)}"
             )
         return prodcode
 
@@ -195,8 +199,7 @@ class RegInterface:
         fwcode.append(result >> 8)
 
         if verbose:
-            print("\nFirmware Version raw byte code returned:")
-            print(fwcode)
+            logger.debug(f"Firmware Version raw byte code returned: {fwcode}")
         return fwcode
 
     def _get_unit_id(self, verbose=False):
@@ -222,7 +225,8 @@ class RegInterface:
             idcode.append(item >> 8)
 
         if verbose:
-            print("\nIMU ID raw byte code returned:")
-            print(idcode)
-            print("\nIMU ID ASCII conversion:\t" + "".join(chr(i) for i in idcode))
+            logger.debug(f"IMU ID raw byte code returned: {idcode}")
+            logger.debug(
+                f"IMU ID ASCII conversion:\t {''.join(chr(i) for i in idcode)}"
+            )
         return idcode

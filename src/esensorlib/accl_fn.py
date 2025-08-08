@@ -2,7 +2,7 @@
 
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -31,6 +31,8 @@ Contains:
 import struct
 import time
 from types import MappingProxyType
+
+from loguru import logger
 
 
 # Custom Exceptions
@@ -85,47 +87,47 @@ class AcclFn:
 
     Methods
     -------
-    get_reg(winnum, regaddr, verbose=False)
-        16-bit read from specified register address
+    get_reg(winnum, regaddr, verbose)
+        16-bit read from specified WIN_ID and register address
 
     set_reg(winnum, regaddr, write_byte, verbose=False)
-        8-bit write to specified register address
+        8-bit write to specified WIN_ID and register address
 
     set_config(**cfg)
         Configure device from key, value parameters
 
-    set_baudrate(baud, verbose=False)
+    set_baudrate(baud, verbose)
         Configure device baudrate setting NOTE: This takes immediate effect.
 
-    init_check(verbose=False)
+    init_check(verbose)
         Check if HARD_ERR (hardware error) is reported
         Usually performed once after startup
 
-    do_selftest(verbose=False)
+    do_selftest(verbose)
         Perform self-test and check if ST_ERR (self-test error) is reported
 
-    do_softreset(verbose=False)
+    do_softreset(verbose)
         Perform software reset
 
-    do_flashtest(verbose=False)
+    do_flashtest(verbose)
         Perform self-test on flash and return result
 
-    backup_flash(verbose=False)
+    backup_flash(verbose)
         Perform flash backup of registers and return result
 
-    init_backup(verbose=False)
+    init_backup(verbose)
         Restore flash to factory default and return result
 
-    goto(mode, post_delay, verbose=False)
+    goto(mode, post_delay, verbose)
         Set device to CONFIG or SAMPLING mode
 
-    get_mode(verbose=False)
+    get_mode(verbose)
         Return device mode status as either CONFIG or SAMPLING
 
-    read_sample()
+    read_sample(verbose)
         Return scaled burst sample of sensor data
 
-    read_sample_unscaled()
+    read_sample_unscaled(verbose)
         Return unscaled burst sample of sensor data
     """
 
@@ -154,7 +156,10 @@ class AcclFn:
 
         self._verbose = verbose
 
-        # Stores device config status with defaults
+        # _cfg is updated when set_config(**cfg) called
+        self._cfg = {}
+
+        # Default device config status
         self._status = {
             "dout_rate": 200,
             "filter_sel": None,
@@ -163,13 +168,15 @@ class AcclFn:
             "counter": False,
             "chksm": False,
             "auto_start": False,
-            "ext_trigger": False,
+            "ext_trigger": "DISABLED",
             "uart_auto": False,
             "drdy_pol": True,
             "tilt": 0,
+            "reduced_noise": False,
+            "temp_stabil": True,
             "is_config": True,
         }
-        # Stores current burst output status with defaults
+        # Stores current burst output status
         self._burst_out = {
             "ndflags": False,
             "tempc": False,
@@ -236,7 +243,7 @@ class AcclFn:
 
     @property
     def reg(self):
-        """property from SensorDevice() instance registers"""
+        """property from SensorDevice() instance Reg"""
         return self.model_def.Reg
 
     def get_reg(self, winnum, regaddr, verbose=False):
@@ -248,38 +255,32 @@ class AcclFn:
         self.regif.set_reg(winnum, regaddr, write_byte, verbose)
 
     def set_config(self, **cfg):
-        """Configure device based on key, value parameters.
-        Configure with supplied key, values,
+        """Configure device based on keyword, value parameters.
+        Configure with supplied key, values
         Then read burst configuration from BURST_CTRL
         and update status dict
 
         Parameters
         ----------
-        "dout_rate": int,
-        "filter_sel": str,
-        "ndflags": bool,
-        "tempc": bool,
-        "counter": bool,
-        "chksm": bool,
-        "auto_start": bool,
-        "ext_trigger": bool,
-        "uart_auto": bool,
-        "burst_fields": [],
-        "is_config": bool,
-        "verbose" : bool, If True outputs additional debug info
+        cfg : dict of keyword arguments
+            Optional keyword arguments
         """
 
-        is_dict = isinstance(cfg, dict)
-        is_none = cfg is None
-        if not (is_dict or is_none):
-            raise TypeError(f"** cfg parameters must be **kwargs or None: {cfg}")
+        if not cfg:
+            logger.warning("** No cfg parameters provided using defaults")
 
-        verbose = cfg.get("verbose", False)
-        self.goto("config", verbose=verbose)
-        self._config_basic(**cfg)
-        self._get_burst_config(verbose=verbose)
+        self._cfg = cfg
+
+        verbose = self._cfg.get("verbose", False)
         if verbose:
-            print(f"Status: {self._status}")
+            logger.debug(f"set_config({cfg})")
+
+        # Place device in CONFIG mode, if not already
+        self.goto("config", verbose=verbose)
+        self._config_basic(verbose)
+        self._get_burst_config(verbose)
+        if verbose:
+            logger.debug(f"accl_fn.status: {self.status}")
 
     def set_baudrate(self, baud, verbose=False):
         """Configure Baud Rate
@@ -296,6 +297,9 @@ class AcclFn:
             If True outputs additional debug info
         """
 
+        if verbose:
+            logger.debug(f"Set Baud Rate = {baud}")
+
         try:
             writebyte = self.mdef.BAUD_RATE[baud]
             self.set_reg(
@@ -304,10 +308,8 @@ class AcclFn:
                 writebyte,
                 verbose,
             )
-            if verbose:
-                print(f"Set Baud Rate = {baud}")
         except KeyError as err:
-            print(f"** Invalid BAUD_RATE, Set Baud Rate = {baud}")
+            logger.error(f"** Invalid BAUD_RATE: {baud}")
             raise InvalidCommandError from err
 
     def init_check(self, verbose=False):
@@ -330,13 +332,11 @@ class AcclFn:
             result = self.get_reg(
                 self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR, verbose
             )
-            if verbose:
-                print(".", end="")
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
         )
         if verbose:
-            print("IMU Startup Check")
+            logger.debug("ACCL Startup Check")
         result = result & 0x0060
         if result:
             raise HardwareError("** Hardware Failure. HARD_ERR bits")
@@ -364,8 +364,6 @@ class AcclFn:
         while (result & 0x0700) != 0:
             # Wait for SELF_TEST = 0
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         print("XSENS_TEST")
         self.set_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDRH, 0x10, verbose)
@@ -374,8 +372,6 @@ class AcclFn:
         while (result & 0x0100) != 0:
             # Wait for SELF_TEST = 0
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         print("YSENS_TEST")
         self.set_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDRH, 0x20, verbose)
@@ -384,8 +380,6 @@ class AcclFn:
         while (result & 0x0200) != 0:
             # Wait for SELF_TEST = 0
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         print("ZSENS_TEST")
         self.set_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDRH, 0x40, verbose)
@@ -394,8 +388,6 @@ class AcclFn:
         while (result & 0x0400) != 0:
             # Wait for SELF_TEST = 0
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
@@ -436,8 +428,6 @@ class AcclFn:
         result = 0x0800
         while (result & 0x0800) != 0:
             result = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
@@ -466,8 +456,6 @@ class AcclFn:
         result = 0x0008
         while (result & 0x0008) != 0:
             result = self.get_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
@@ -490,36 +478,38 @@ class AcclFn:
         FlashBackupError
             non-zero results indicates FLASH_BU_ERR
         """
+        if not self.mdef.HAS_FEATURE.get("INITIAL_BACKUP"):
+            logger.warning("Initial backup function not supported. Bypassing...")
+            return
 
         self.set_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR, 0x04, verbose)
         time.sleep(self.mdef.FLASH_BACKUP_DELAY_S)
         result = 0x0010
         while (result & 0x0010) != 0:
             result = self.get_reg(self.reg.GLOB_CMD.WINID, self.reg.GLOB_CMD.ADDR)
-            if verbose:
-                print(".", end="")
 
         result = self.get_reg(
             self.reg.DIAG_STAT.WINID, self.reg.DIAG_STAT.ADDR, verbose
         )
         result = result & 0x0001
         if result:
-            raise FlashBackupError("** Flash Backup Failure. FLASH_BU_ERR bit")
+            raise FlashBackupError("** Initial Backup Failure. FLASH_BU_ERR bit")
         print("Initial Backup Completed")
 
-    def goto(self, mode, post_delay=0.2, verbose=False):
+    def goto(self, mode="config", post_delay=0.2, verbose=False):
         """Set MODE_CMD to either CONFIG or SAMPLING or SLEEP mode.
 
-        NOTE: SLEEP mode cannot be exited from without EXT signal or HW reset
-
+        NOTE: SLEEP mode cannot be exited without EXT signal or HW reset
         If entering SAMPLING, store the state of burst configuration
+        update _status
+        if no_init, avoid register accesses
         NOTE: Device must be in SAMPLING mode to call read_sample()
-        NOTE: Device must be in CONFIG mode for most register write functions
+        NOTE: Device must be in CONFIG mode for most configuration functions
 
         Parameters
         ----------
         mode : str
-            Can be "config" or "sampling" or "sleep"
+            "config" or "sampling" or "sleep"
         post_delay : float
             Delay time in seconds after sending command before returning
         verbose : bool
@@ -530,18 +520,28 @@ class AcclFn:
         InvalidCommandError
             Raises to caller when mode is not valid string
         """
+
         if not isinstance(mode, str):
             raise TypeError(
                 f"** Mode parameter must be 'config' or 'sampling' or 'sleep': {mode}"
             )
 
         mode = mode.upper()
+        self._status["is_config"] = mode == "CONFIG"
+
+        if verbose:
+            logger.debug(f"MODE_CMD = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning(
+                "--no_init option specified, bypass setting in MODE_CTRL register"
+            )
+            return
+
         try:
-            # When entering SAMPLING mode, update the
-            # self._burst_out & self._status from
-            # _get_burst_config()
+            # When entering SAMPLING mode, get burst read configuration
             if mode == "SAMPLING":
-                self._get_burst_config(verbose=verbose)
+                self._get_burst_config(verbose)
 
             self.set_reg(
                 self.reg.MODE_CTRL.WINID,
@@ -554,15 +554,13 @@ class AcclFn:
             # flush any pending incoming burst data
             if mode == "CONFIG":
                 self.regif.port_io.reset_input_buffer()
-            if verbose:
-                print(f"MODE_CMD = {mode}")
-            self._status["is_config"] = mode == "CONFIG"
+
         except KeyError as err:
-            print("** Invalid MODE_CMD")
+            logger.error("** Invalid MODE_CMD")
             raise InvalidCommandError from err
 
     def get_mode(self, verbose=False):
-        """Return MODE_STAT bit
+        """Return MODE_STAT bits
 
         Parameters
         ----------
@@ -588,7 +586,7 @@ class AcclFn:
         ) >> 10
         self._status["is_config"] = result == 0x01
         if verbose:
-            print(f"MODE_CMD = {result}")
+            logger.debug(f"MODE_CMD = {result}")
         return result
 
     def read_sample(self, verbose=False):
@@ -605,9 +603,9 @@ class AcclFn:
         Returns
         -------
         tuple
-            tuple containing single set of sensor burst data with or
-            without scale factor applied
-            () if burst data is malformed or device not in SAMPLING
+            tuple containing single set of sensor burst data with
+            scale factor applied or () if burst data is malformed
+            or device not in SAMPLING
 
         Raises
         -------
@@ -628,7 +626,7 @@ class AcclFn:
             print("Stop reading sensor")
             raise
         except IOError:
-            print("** Failure reading sensor sample")
+            logger.error("** Failure reading sensor sample")
             raise
 
     def read_sample_unscaled(self, verbose=False):
@@ -645,9 +643,9 @@ class AcclFn:
         Returns
         -------
         tuple
-            tuple containing single set of sensor burst data with or
-            without scale factor applied
-            () if burst data is malformed or device not in SAMPLING
+            tuple containing single set of sensor burst data
+            without scale factor applied or () if burst data
+            is malformed or device not in SAMPLING
 
         Raises
         -------
@@ -668,12 +666,13 @@ class AcclFn:
             print("Stop reading sensor")
             raise
         except IOError:
-            print("** Failure reading sensor sample")
+            logger.error("** Failure reading sensor sample")
             raise
 
     def _get_burst_config(self, verbose=False):
-        """Read BURST_CTRL to update
-        _b_struct, _burst_out, _burst_fields
+        """Typically read from BURST_CTRL.
+        For no_init, read from self._cfg to update
+        _burst_out, _b_struct, _burst_fields
 
         Parameters
         ----------
@@ -681,29 +680,45 @@ class AcclFn:
             If True outputs additional debug info
         """
 
-        tmp1 = self.get_reg(
-            self.reg.BURST_CTRL.WINID, self.reg.BURST_CTRL.ADDR, verbose
-        )
+        no_init = self._cfg.get("no_init", False)
 
-        self._burst_out["ndflags"] = bool(tmp1 & 0x8000)
-        self._burst_out["tempc"] = bool(tmp1 & 0x4000)
-        self._burst_out["acclx"] = bool(tmp1 & 0x0400)
-        self._burst_out["accly"] = bool(tmp1 & 0x0200)
-        self._burst_out["acclz"] = bool(tmp1 & 0x0100)
-        self._burst_out["counter"] = bool(tmp1 & 0x0002)
-        self._burst_out["chksm"] = bool(tmp1 & 0x0001)
+        if not no_init:
+            tmp1 = self.get_reg(
+                self.reg.BURST_CTRL.WINID, self.reg.BURST_CTRL.ADDR, verbose
+            )
+
+            self._burst_out["ndflags"] = bool(tmp1 & 0x8000)
+            self._burst_out["tempc"] = bool(tmp1 & 0x4000)
+            self._burst_out["acclx"] = bool(tmp1 & 0x0400)
+            self._burst_out["accly"] = bool(tmp1 & 0x0200)
+            self._burst_out["acclz"] = bool(tmp1 & 0x0100)
+            self._burst_out["counter"] = bool(tmp1 & 0x0002)
+            self._burst_out["chksm"] = bool(tmp1 & 0x0001)
+        else:
+            logger.warning(
+                "--no_init option assumes device is already configured "
+                "with user-specified settings and AUTO_START "
+                "enabled."
+            )
+            self._burst_out["ndflags"] = self._cfg.get("ndflags", False)
+            self._burst_out["tempc"] = self._cfg.get("tempc", False)
+            self._burst_out["acclx"] = True
+            self._burst_out["accly"] = True
+            self._burst_out["acclz"] = True
+            self._burst_out["counter"] = bool(self._cfg.get("counter", ""))
+            self._burst_out["chksm"] = self._cfg.get("chksm", False)
 
         self._b_struct = self._get_burst_struct_fmt()
         self._burst_fields = self._get_burst_fields()
 
         if verbose:
-            print(f"_get_burst_struct_fmt(): {self._b_struct}")
-            print(f"_get_burst_fields(): {self._burst_fields}")
-            print(f"_get_burst_config(): {self._burst_out}")
+            logger.debug(f"burst_out: {self._burst_out}")
+            logger.debug(f"burst_struct_fmt: {self._b_struct}")
+            logger.debug(f"burst_fields: {self._burst_fields}")
 
     def _get_burst_struct_fmt(self):
         """Returns the struct format for burst packet
-        based on _burst_out (from BURST_CTRL)
+        based on _burst_out
 
         Returns
         -------
@@ -713,7 +728,7 @@ class AcclFn:
 
         # Build struct format based on decoded flags
         # of bytes from BURST_CTRL & SIG_CTRL
-        # > = Big endian, B = unsigned char
+        # > = Big endian, B = unsigned char, b = signed char
         # i = int (4 byte), I = unsigned int (4 byte)
         # h = short (2byte), H = unsigned short (2 byte)
 
@@ -755,74 +770,52 @@ class AcclFn:
 
         return tuple(burst_fields)
 
-    def _set_ndflags(self, burst_cfg, verbose=False):
-        """Configure SIG_CTRL based on burst_cfg dict
-        NOTE: Not used when UART_AUTO is enabled
+    def _set_output_rate(self, output_rate=200, verbose=False):
+        """Configure DOUT_RATE and update _status, and
+        if no_init then do not write to registers
 
         Parameters
         ----------
-        burst_cfg : dict
-            parses burst flags from dict to enable in SIG_CTRL
+        output_rate : int
+            Specify DOUT_RATE setting in sps
         verbose : bool
             If True outputs additional debug info
-        """
-        # If UART_AUTO then ignore setting SIG_CTRL
-        if self._status["uart_auto"]:
-            return
 
-        try:
-            # SIG_CTRL
-            _wval = (
-                int(burst_cfg["tempc"]) << 7
-                | int(burst_cfg["acclx"]) << 3
-                | int(burst_cfg["accly"]) << 2
-                | int(burst_cfg["acclz"]) << 1
-            )
-            self.set_reg(
-                self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDRH, _wval, verbose
-            )
-
-        except KeyError as err:
-            print("** Invalid SIG_CTRL setting")
-            raise InvalidCommandError from err
-
-    def _set_output_rate(self, rate, verbose=False):
-        """Configure Output Data Rate DOUT_RATE
-
-        Parameters
-        ----------
-        rate : int
-            Supported DOUT_RATE in Hz to apply
-        verbose : bool
-            If True outputs additional debug info
         Raises
         -------
         InvalidCommandError
-            When unsupported rate is specified
+            When unsupported output_rate is specified
         """
 
+        self._status["dout_rate"] = output_rate
+
+        if verbose:
+            logger.debug(f"Set Output Rate = {output_rate}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting DOUT_RATE register")
+            return
+
         try:
-            writebyte = self.mdef.DOUT_RATE[rate]
+            writebyte = self.mdef.DOUT_RATE[output_rate]
             self.set_reg(
                 self.reg.SMPL_CTRL.WINID,
                 self.reg.SMPL_CTRL.ADDRH,
                 writebyte,
                 verbose,
             )
-            self._status["dout_rate"] = rate
-            if verbose:
-                print(f"Set Output Rate = {rate}")
         except KeyError as err:
-            print(f"** Invalid DOUT_RATE, Set Output Rate = {rate}")
+            logger.error(f"** Invalid DOUT_RATE, Set Output Rate = {output_rate}")
             raise InvalidCommandError from err
 
     def _set_filter(self, filter_type=None, verbose=False):
-        """Configure Filter Type FILTER_SEL
+        """Configure FILTER_SEL and update _status, and
+        if no_init then do not write to registers
 
         Parameters
         ----------
         filter_type : str
-            Supported filter setting to apply.
+            Specify FILTER_SEL type setting
             If None, then auto select based on DOUT_RATE
         verbose : bool
             If True outputs additional debug info
@@ -832,8 +825,10 @@ class AcclFn:
             When unsupported filter_type is specified
         """
 
-        if self._status["dout_rate"] is None:
-            print("Set Output Rate before setting the filter", "filter setting ignored")
+        if self._status.get("dout_rate") is None:
+            logger.warning(
+                "Set Output Rate before setting the filter. " "Filter setting ignored"
+            )
             return
 
         map_filter = {
@@ -847,10 +842,21 @@ class AcclFn:
         # If no filter_type set to "safe" filter based on DOUT_RATE
         if filter_type is None:
             filter_type = map_filter.get(self._status["dout_rate"])
+            print(f"Filter not specified, setting to {filter_type}")
 
         _filter_sel = self.mdef.FILTER_SEL
 
         filter_type = filter_type.upper()
+
+        self._status["filter_sel"] = filter_type
+
+        if verbose:
+            logger.debug(f"Filter Type = {filter_type}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting FILTER_SEL register")
+            return
+
         try:
             writebyte = _filter_sel[filter_type]
             self.set_reg(
@@ -865,17 +871,13 @@ class AcclFn:
                 result = self.get_reg(
                     self.reg.FILTER_CTRL.WINID, self.reg.FILTER_CTRL.ADDR
                 )
-                if verbose:
-                    print(".", end="")
-            self._status["filter_sel"] = filter_type
-            if verbose:
-                print(f"Filter Type = {filter_type}")
         except KeyError as err:
-            print(f"** Invalid FILTER_SEL, Filter Type = {filter_type}")
+            logger.error(f"** Invalid FILTER_SEL, Filter Type = {filter_type}")
             raise InvalidCommandError from err
 
-    def _set_uart_mode(self, mode, verbose=False):
-        """Configure AUTO_START and UART_AUTO bits in UART_CTRL register
+    def _set_uart_mode(self, mode=0x02, verbose=False):
+        """Configure AUTO_START and UART_AUTO bits in UART_CTRL register,
+           update _status, and if no_init do not write to registers
 
         Parameters
         ----------
@@ -885,44 +887,65 @@ class AcclFn:
             If True outputs additional debug info
         """
 
+        self._status["auto_start"] = (mode & 0x02) == 2
+        self._status["uart_auto"] = (mode & 0x01) == 1
+
+        if verbose:
+            logger.debug(f"_set_uart_mode({mode})")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting UART_CTRL register")
+            return
+
         self.set_reg(
             self.reg.UART_CTRL.WINID, self.reg.UART_CTRL.ADDR, mode & 0x03, verbose
         )
-        self._status["auto_start"] = (mode & 0x02) == 2
-        self._status["uart_auto"] = (mode & 0x01) == 1
-        if verbose:
-            print(f"IMU UART Mode = {mode}")
 
-    def _set_ext_sel(self, enabled=False, verbose=False):
+    def _set_ext_sel(self, mode="DISABLED", verbose=False):
         """Configure EXT pin function
 
         Parameters
         ----------
-        enabled : bool
-            Enable External Trigger or not
+        mode : str
+            "DISABLED", "EXT_TRIG", "TRIG_POS_EDGE", "TRIG_NEG_EDGE",
+            "1PPS_POS" or "1PPS_POS"
         verbose : bool
             If True outputs additional debug info
         """
 
+        if not self.mdef.HAS_FEATURE.get("EXT_PIN"):
+            if verbose:
+                logger.warning("EXT pin function not supported...")
+            return
+        mode = mode.upper()
+        self._status["ext_trigger"] = mode
+
+        if verbose:
+            logger.debug(f"EXT_SEL/EXT_POL = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting EXT function in MSC_CTRL register")
+            return
+
+        _ext_sel = self.mdef.EXT_SEL
         try:
+            mode_val = _ext_sel[mode]
             _tmp = self.get_reg(
                 self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR, verbose
             )
             self.set_reg(
                 self.reg.MSC_CTRL.WINID,
                 self.reg.MSC_CTRL.ADDR,
-                (_tmp & 0x06) | enabled << 6,
+                (_tmp & 0x06) | mode_val << 5,
                 verbose,
             )
-            self._status["ext_trigger"] = enabled
-            if verbose:
-                print(f"EXT_SEL = {enabled}")
         except KeyError as err:
-            print("** Invalid EXT_SEL")
+            logger.error(f"** Invalid EXT_SEL/EXT_POL = {mode}")
             raise InvalidCommandError from err
 
     def _set_drdy_polarity(self, act_high=True, verbose=False):
-        """Configure DRDY polarity to active HIGH
+        """Configure DRDY to active HIGH in MSC_CTRL
+           update _status, and if no_init do not write to registers
 
         Parameters
         ----------
@@ -932,6 +955,15 @@ class AcclFn:
             If True outputs additional debug info
         """
 
+        self._status["drdy_pol"] = act_high
+
+        if verbose:
+            logger.debug(f"DRDY_POL = {act_high}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting DRDY_POL in MSC_CTRL register")
+            return
+
         _tmp = self.get_reg(self.reg.MSC_CTRL.WINID, self.reg.MSC_CTRL.ADDR, verbose)
         self.set_reg(
             self.reg.MSC_CTRL.WINID,
@@ -939,9 +971,6 @@ class AcclFn:
             (_tmp & 0xFD) | int(act_high) << 1,
             verbose,
         )
-        self._status["drdy_pol"] = act_high
-        if verbose:
-            print(f"DRDY_POL = {act_high}")
 
     def _set_tilt(self, mask=0b000, verbose=False):
         """Configure TILT enable bits in SIG_CTRL
@@ -953,6 +982,14 @@ class AcclFn:
         verbose : bool
             If True outputs additional debug info
         """
+        self._status["tilt"] = mask
+
+        if verbose:
+            logger.debug(f"TILT = {mask}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting OUTPUT_SEL_x in SIG_CTRL register")
+            return
 
         _tmp = self.get_reg(self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDR, verbose)
         self.set_reg(
@@ -961,42 +998,85 @@ class AcclFn:
             (_tmp & 0x1F) | mask << 5,
             verbose,
         )
-        self._status["tilt"] = mask
-        if verbose:
-            print(f"TILT = {mask}")
 
-    def _config_basic(
-        self,
-        dout_rate=200,
-        filter_sel=None,
-        ndflags=False,
-        tempc=False,
-        counter=False,
-        chksm=False,
-        auto_start=False,
-        ext_trigger=False,
-        uart_auto=False,
-        drdy_pol=True,
-        tilt=0,
-        verbose=False,
-        **cfg,
-    ):
-        """Configure basic settings based on key, value parameters
+    def _set_mesmod(self, mode=False, verbose=False):
+        """Configure MESMOD_SEL bit in SIG_CTRL
 
         Parameters
         ----------
-        "dout_rate": 200,
-        "filter_sel": None,
-        "ndflags": False,
-        "tempc": False,
-        "counter": False,
-        "chksm": False,
-        "auto_start": False,
-        "ext_trigger": False,
-        "uart_auto": False,
-        "drdy_pol": True,
-        "tilt": 0,
-        "verbose" : bool, If True outputs additional debug info
+        enable : bool
+            If True enables reduced noise floor condition
+        verbose : bool
+            If True outputs additional debug info
+        """
+
+        if not self.mdef.HAS_FEATURE.get("REDUCED_NOISE"):
+            if verbose:
+                logger.warning(
+                    "Reduced noise floor function not supported. Bypassing..."
+                )
+            return
+
+        self._status["reduced_noise"] = mode
+
+        if verbose:
+            logger.debug(f"MESMOD_SEL = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting MESMOD_SEL in SIG_CTRL register")
+            return
+
+        _tmp = self.get_reg(self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDR, verbose)
+        self.set_reg(
+            self.reg.SIG_CTRL.WINID,
+            self.reg.SIG_CTRL.ADDR,
+            (_tmp & 0xEF) | int(mode) << 4,
+            verbose,
+        )
+
+    def _set_temp_stabil(self, mode=True, verbose=False):
+        """Configure TEMP_STABIL bit in SIG_CTRL
+
+        Parameters
+        ----------
+        enable : bool
+            If True enables bias shock stabilization against temperature
+        verbose : bool
+            If True outputs additional debug info
+        """
+
+        if not self.mdef.HAS_FEATURE.get("TEMP_STABIL"):
+            if verbose:
+                logger.warning(
+                    "Bias stabilization against thermal shock function "
+                    "not supported. Bypassing..."
+                )
+            return
+
+        self._status["temp_stabil"] = mode
+
+        if verbose:
+            logger.debug(f"TEMP_STABIL = {mode}")
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting TEMP_STABIL in SIG_CTRL register")
+            return
+
+        _tmp = self.get_reg(self.reg.SIG_CTRL.WINID, self.reg.SIG_CTRL.ADDR, verbose)
+        self.set_reg(
+            self.reg.SIG_CTRL.WINID,
+            self.reg.SIG_CTRL.ADDR,
+            (_tmp & 0xFB) | int(mode) << 2,
+            verbose,
+        )
+
+    def _config_basic(self, verbose=False):
+        """Configure basic device settings based on self._cfg dict
+
+        Parameters
+        ----------
+        verbose : bool
+            If True outputs additional debug info
 
         Raises
         ----------
@@ -1004,54 +1084,47 @@ class AcclFn:
             When unsupported configuration provided
         """
 
+        if verbose:
+            logger.debug(f"_config_basic:\nself._cfg:({self._cfg})")
+
         try:
-            self._set_ext_sel(ext_trigger, verbose=verbose)
-            self._set_drdy_polarity(drdy_pol, verbose=verbose)
-            self._set_tilt(tilt, verbose=verbose)
-            self._set_output_rate(dout_rate, verbose=verbose)
-            self._set_filter(filter_sel, verbose=verbose)
+            # MSC_CTRL - EXT_SEL & DRDY
+            ext_trigger = self._cfg.get("ext_trigger", "DISABLED")
+            self._set_ext_sel(ext_trigger, verbose)
+            drdy_pol = self._cfg.get("drdy_pol", True)
+            self._set_drdy_polarity(drdy_pol, verbose)
+            # SIG_CTRL - TILT, MESMOD_SEL & TEMP_STABIL
+            tilt = self._cfg.get("tilt", 0)
+            self._set_tilt(tilt, verbose)
 
-            _wval = int(auto_start) << 1 | int(uart_auto)
-            self._set_uart_mode(_wval, verbose=verbose)
+            mesmod_sel = self._cfg.get("reduced_noise", False)
+            self._set_mesmod(mesmod_sel, verbose)
 
-            # BURST_CTRL HIGH for cfg
-            _wval = (
-                int(ndflags) << 7
-                | int(tempc) << 6
-                | 0 << 5  # reserved
-                | 0 << 4  # reserved
-                | 0 << 3  # reserved
-                | 1 << 2  # acclx always enabled
-                | 1 << 1  # accly always enabled
-                | 1 << 0  # acclz always enabled
-            )
-            self.set_reg(
-                self.reg.BURST_CTRL.WINID,
-                self.reg.BURST_CTRL.ADDRH,
-                _wval,
-                verbose=verbose,
-            )
-            self._status["ndflags"] = ndflags
-            self._status["tempc"] = tempc
+            temp_stabil = self._cfg.get("temp_stabil", True)
+            self._set_temp_stabil(temp_stabil, verbose)
+            # DOUT_RATE
+            dout_rate = self._cfg.get("dout_rate", 200)
+            self._set_output_rate(dout_rate, verbose)
+            # FILTER_SEL
+            filter_sel = self._cfg.get("filter_sel", None)
+            self._set_filter(filter_sel, verbose)
+            # UART_CTRL
+            auto_start = self._cfg.get("auto_start", False)
+            uart_auto = self._cfg.get("uart_auto", False)
+            mode = int(auto_start) << 1 | int(uart_auto)
+            self._set_uart_mode(mode, verbose)
 
-            # BURST_CTRL LOW for cfg
-            _wval = int(counter) << 1 | int(chksm)
-            self.set_reg(
-                self.reg.BURST_CTRL.WINID,
-                self.reg.BURST_CTRL.ADDR,
-                _wval,
-                verbose=verbose,
-            )
-            self._status["counter"] = counter
-            self._status["chksm"] = chksm
+            # BURST_CTRL
+            self._config_burst_ctrl(verbose)
 
             print("Configured")
+
             # If UART_AUTO then ignore setting SIG_CTRL
-            if self._status.get("uart_auto") is True:
+            if uart_auto is True:
                 return
 
-            # SIG_CTRL for cfg - tempc, Accl
-            _wval = int(tempc) << 7 | 7 << 1  # AcclXYZ
+            # SIG_CTRL - tempc, accl
+            _wval = int(self._cfg.get("tempc", False)) << 7 | 7 << 1  # AcclXYZ
             self.set_reg(
                 self.reg.SIG_CTRL.WINID,
                 self.reg.SIG_CTRL.ADDRH,
@@ -1059,12 +1132,12 @@ class AcclFn:
                 verbose=verbose,
             )
         except KeyError as err:
-            print("** Failure writing basic configuration to device")
+            logger.error("** Failure writing basic configuration to device")
             raise DeviceConfigurationError from err
 
     def _get_sample(self, inter_delay=0.000001, verbose=False):
-        """Return single burst from device
-        if malformed find next header and raise InvalidBurstReadError
+        """Return single burst from device if burst is malformed
+        then find next header byte and raise InvalidBurstReadError
 
         Parameters
         ----------
@@ -1091,16 +1164,16 @@ class AcclFn:
 
         # Return if struct is empty, then device is not configured
         if self._b_struct == "":
-            print("** Device not configured. Have you run set_config()?")
+            logger.error("** Device not configured. Have you run set_config()?")
             raise InvalidCommandError
         # Return if still in CONFIG mode
         if self._status.get("is_config"):
-            print("** Device not in SAMPLING mode. Run goto('sampling') first.")
+            logger.error("** Device not in SAMPLING mode. Run goto('sampling') first.")
             raise InvalidCommandError
         # Get data structure of the burst
         data_struct = struct.Struct(self._b_struct)
         # If UART_AUTO disabled, send BURST command
-        if self._status["uart_auto"] is False:
+        if not self._status["uart_auto"]:
             self.regif.port_io.set_raw8(self.mdef.BURST_MARKER, 0x00, verbose)
 
         try:
@@ -1113,7 +1186,7 @@ class AcclFn:
             if (data_unpacked[0] != self.mdef.BURST_MARKER) or (
                 data_unpacked[-1] != self.mdef.DELIMITER
             ):
-                print("** Missing Header or Delimiter")
+                logger.warning("** Missing Header or Delimiter")
                 raise InvalidBurstReadError
 
             # Strip out the header and delimiter byte
@@ -1126,8 +1199,8 @@ class AcclFn:
             raise
 
     def _proc_sample(self, raw_burst=()):
-        """Process parameter as single burst read of device data
-        Returns processed data in a tuple or None if empty burst
+        """Process as single burst read of device data
+        Returns processed data in a tuple or () if empty burst
 
         Parameters
         ----------
@@ -1142,7 +1215,7 @@ class AcclFn:
         Raises
         -------
         InvalidBurstReadError
-            If raw_burst is Falsey
+            If raw_burst is False
         KeyboardInterrupt
             When CTRL-C occurs re-raise
         """
@@ -1153,13 +1226,14 @@ class AcclFn:
 
             # Locally held scale factor
             sf_tempc = self.mdef.SF_TEMPC
+            tempc_offset = self.mdef.TEMPC_OFFSET
             sf_accl = self.mdef.SF_ACCL
             sf_tilt = self.mdef.SF_TILT
 
             # Map conversions for scaled
             map_scl = {
                 "ndflags": lambda x: x,
-                "tempc": lambda x: round((x * sf_tempc) + 34.987, 4),
+                "tempc": lambda x: round((x * sf_tempc) + tempc_offset, 4),
                 "acclx": lambda x: round(x * sf_accl, 6),
                 "accly": lambda x: round(x * sf_accl, 6),
                 "acclz": lambda x: round(x * sf_accl, 6),
@@ -1177,3 +1251,53 @@ class AcclFn:
         except KeyboardInterrupt:
             print("CTRL-C: Exiting")
             raise
+
+    def _config_burst_ctrl(self, verbose=False):
+        """Configure BURST_CTRL
+
+        Parameters
+        ----------
+        verbose : bool
+            If True outputs additional debug info
+        """
+
+        ndflags = self._cfg.get("ndflags", False)
+        tempc = self._cfg.get("tempc", False)
+        counter = self._cfg.get("counter", "")
+        chksm = self._cfg.get("chksm", False)
+        verbose = self._cfg.get("verbose", False)
+
+        self._status["ndflags"] = ndflags
+        self._status["tempc"] = tempc
+        self._status["counter"] = counter
+        self._status["chksm"] = chksm
+
+        if self._cfg.get("no_init", False):
+            logger.warning("--no_init bypass setting BURST_CTRL register")
+            return
+
+        # BURST_CTRL HIGH
+        _wval = (
+            int(ndflags) << 7
+            | int(tempc) << 6
+            | 0 << 5  # reserved
+            | 0 << 4  # reserved
+            | 0 << 3  # reserved
+            | 1 << 2  # ACCX
+            | 1 << 1  # ACCY
+            | 1  # ACCZ
+        )
+        self.set_reg(
+            self.reg.BURST_CTRL.WINID,
+            self.reg.BURST_CTRL.ADDRH,
+            _wval,
+            verbose=verbose,
+        )
+        # BURST_CTRL LOW
+        _wval = int(bool(counter)) << 1 | int(chksm)
+        self.set_reg(
+            self.reg.BURST_CTRL.WINID,
+            self.reg.BURST_CTRL.ADDR,
+            _wval,
+            verbose=verbose,
+        )

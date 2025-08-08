@@ -1,6 +1,6 @@
 # MIT License
 
-# Copyright (c) 2023, 2024 Seiko Epson Corporation
+# Copyright (c) 2023, 2025 Seiko Epson Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -49,3 +49,18 @@ class Reg(Enum):
         self.WINID = winid
         self.ADDR = addr
         self.ADDRH = addrh
+
+
+# Device features
+HAS_FEATURE = {
+    "GYRO": True,
+    "ACCL": True,
+    "DLT_OUTPUT": False,
+    "ATTI_OUTPUT": False,
+    "ATTI_ON_REG": False,
+    "ROT_MATRIX": False,
+    "INITIAL_BACKUP": False,
+    "RANGE_OVER": False,
+    "RT_DIAG": False,
+    "A_RANGE": False,
+}
