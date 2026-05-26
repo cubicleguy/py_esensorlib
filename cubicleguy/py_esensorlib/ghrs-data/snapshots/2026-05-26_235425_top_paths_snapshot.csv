@@ -1,0 +1,11 @@
+url_path,views_total,views_unique
+/cubicleguy/py_esensorlib,16,13
+/cubicleguy/py_esensorlib/blob/main/src/esensorlib/example/imu_logger.py,6,4
+/cubicleguy/py_esensorlib/tree/main/src/esensorlib,6,4
+/cubicleguy/py_esensorlib/blob/main/src/esensorlib/imu_fn.py,3,3
+/cubicleguy/py_esensorlib/tree/main/src/esensorlib/example,3,3
+/cubicleguy/py_esensorlib/blob/main/src/esensorlib/example/helper.py,3,2
+/cubicleguy/py_esensorlib/blob/main/README.md,2,2
+/cubicleguy/py_esensorlib/tree/main/src/esensorlib/model,2,2
+/cubicleguy/py_esensorlib/blob/main/pyproject.toml,1,1
+/cubicleguy/py_esensorlib/blob/main/src/esensorlib/sensor_device.py,1,1
